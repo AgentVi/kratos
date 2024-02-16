@@ -129,6 +129,8 @@ func (e *HookExecutor) handleSettingsError(_ http.ResponseWriter, r *http.Reques
 				group = node.PasswordGroup
 			case "oidc":
 				group = node.OpenIDConnectGroup
+			case "ldap":
+				group = node.LDAPGroup
 			}
 
 			cont, err := container.NewFromStruct("", group, i.Traits, "traits")

@@ -1,0 +1,173 @@
+version: v1.0.0
+
+dsn: memory
+
+serve:
+  public:
+    base_url: http://127.0.0.1:4433/
+    cors:
+      enabled: true
+      debug: true
+      allow_credentials: true # verify if needed
+      allowed_origins:
+        - http://127.0.0.1:8001
+        - http://localhost:8001
+        - http://127.0.0.1:8082
+        - http://localhost:8082
+        - http://127.0.0.1:5001
+        - http://localhost:5001
+      allowed_methods:
+        - POST
+        - GET
+        - PUT
+        - PATCH
+        - DELETE
+      allowed_headers:
+        - Authorization
+        - Cookie
+        - Content-Type
+      exposed_headers:
+        - Content-Type
+        - Set-Cookie
+  admin:
+    base_url: http://kratos:4434/
+
+#session:
+#  cookie:
+#    same_site: Strict
+#    persistent: false
+
+selfservice:
+  default_browser_return_url: http://127.0.0.1:4455/
+  allowed_return_urls:
+    - http://127.0.0.1:4455
+
+  methods:
+    password:
+      enabled: true
+    totp:
+      config:
+        issuer: irisity.dev
+      enabled: false
+    ldap:
+      enabled: true
+      config:
+        ldap_url: ldap://localhost:1389
+        bind_dn: cn=admin,dc=example,dc=org
+        bind_pw: adminpassword
+        user_search:
+          base_dn: ou=users,dc=example,dc=org
+          filter: (objectClass=inetOrgPerson)
+          username: uid
+          identity_attributes:
+            - name: firstname
+              attr: givenName
+            - name: lastname
+              attr: sn
+            - name: title
+              attr: personalTitle
+            - name: email
+              attr: mail
+        group_search:
+          base_dn: ou=root,ou=accounts,ou=irisplus,ou=surveillance,dc=example,dc=org
+          filter: (objectClass=organizationalUnit)
+          name_attr: cn
+          groups_from_user_memberof: true
+          user_matchers:
+            - user_attr: uid
+              group_attr: uniqueMember
+        update_user_identity:
+          enabled: true
+          refresh_time: 5m
+    code:
+      config:
+        lifespan: 20m
+
+  flows:
+    error:
+      ui_url: http://127.0.0.1:4455/error
+
+    settings:
+      ui_url: http://127.0.0.1:4455/settings
+      privileged_session_max_age: 15m
+      required_aal: highest_available
+
+
+    recovery:
+      enabled: true
+      ui_url: http://127.0.0.1:4455/recovery
+      use: code
+
+    verification:
+      enabled: true
+      ui_url: http://127.0.0.1:4455/verification
+      use: code
+      after:
+        default_browser_return_url: http://127.0.0.1:4455/
+
+    logout:
+      after:
+        default_browser_return_url: http://127.0.0.1:4455/login
+
+    login:
+      ui_url: http://127.0.0.1:4455/login
+      lifespan: 20m
+      after:
+        hooks:
+          # Web hook to be called after successful login
+          # The body is a base64 encoding of: function(ctx) { id: ctx.identity.id, user_id: ctx.identity.metadata_public.userId, session_assurance_level: ctx.flow.requested_aal }
+          - hook: web_hook
+            config:
+              url: http://172.29.177.207:8084/v1/hooks/login/after
+              method: POST
+              body: base64://ZnVuY3Rpb24oY3R4KSB7IGlkOiBjdHguaWRlbnRpdHkuaWQsIHVzZXJfaWQ6IGN0eC5pZGVudGl0eS5tZXRhZGF0YV9wdWJsaWMudXNlcklkLCBzZXNzaW9uX2Fzc3VyYW5jZV9sZXZlbDogY3R4LmZsb3cucmVxdWVzdGVkX2FhbCB9
+              response:
+                ignore: true
+
+    registration:
+      enabled: true
+      lifespan: 10m
+      ui_url: http://127.0.0.1:4455/auth/registration
+#      after:
+#        password:
+#          hooks:
+#            - hook: session
+#        oidc:
+#          hooks:
+#            - hook: session
+#        ldap:
+#          hooks:
+#            - hook: session
+
+log:
+  level: info
+  format: text
+  leak_sensitive_values: false
+
+secrets:
+  cookie:
+    - PLEASE-CHANGE-ME-I-AM-VERY-INSECURE
+  cipher:
+    - 32-LONG-SECRET-NOT-SECURE-AT-ALL
+
+ciphers:
+  algorithm: xchacha20-poly1305
+
+hashers:
+  algorithm: bcrypt
+  bcrypt:
+    cost: 12
+
+identity:
+  default_schema_id: default
+  schemas:
+    - id: default
+      url: file:///home/persollid/go/src/github.com/kratos/kratos/contrib/quickstart/kratos/ldap/identity.schema.json
+
+courier:
+  smtp:
+    connection_uri: smtps://test:test@localhost:1025/?skip_ssl_verify=true
+
+session:
+  lifespan: 30m
+  earliest_possible_extend: 15m

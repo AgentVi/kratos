@@ -1388,7 +1388,7 @@
         },
         "methods": {
           "type": "object",
-          "additionalProperties": false,
+          "additionalProperties": true,
           "properties": {
             "profile": {
               "type": "object",

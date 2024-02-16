@@ -6,6 +6,7 @@ package driver
 import (
 	"context"
 	"crypto/sha256"
+	"github.com/ory/kratos/selfservice/strategy/ldap"
 	"net/http"
 	"strings"
 	"sync"
@@ -320,6 +321,7 @@ func (m *RegistryDefault) selfServiceStrategies() []interface{} {
 			totp.NewStrategy(m),
 			webauthn.NewStrategy(m),
 			lookup.NewStrategy(m),
+			ldap.NewStrategy(m),
 		}
 	}
 

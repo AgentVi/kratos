@@ -20,6 +20,7 @@ func sortNodes(ctx context.Context, n node.Nodes, schemaRef string) error {
 			node.LookupGroup,
 			node.WebAuthnGroup,
 			node.TOTPGroup,
+			node.LDAPGroup,
 		}),
 		node.SortUseOrderAppend([]string{
 			// Lookup

@@ -18,6 +18,7 @@ func sortNodes(ctx context.Context, n node.Nodes) error {
 			node.PasswordGroup,
 			node.TOTPGroup,
 			node.LookupGroup,
+			node.LDAPGroup,
 		}),
 		node.SortUseOrder([]string{
 			"csrf_token",

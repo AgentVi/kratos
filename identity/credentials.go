@@ -55,6 +55,8 @@ func (c CredentialsType) ToUiNodeGroup() node.UiNodeGroup {
 		return node.WebAuthnGroup
 	case CredentialsTypeLookup:
 		return node.LookupGroup
+	case CredentialsTypeLDAP:
+		return node.LDAPGroup
 	default:
 		return node.DefaultGroup
 	}
@@ -67,6 +69,7 @@ const (
 	CredentialsTypeTOTP     CredentialsType = "totp"
 	CredentialsTypeLookup   CredentialsType = "lookup_secret"
 	CredentialsTypeWebAuthn CredentialsType = "webauthn"
+	CredentialsTypeLDAP     CredentialsType = "ldap"
 )
 
 const (

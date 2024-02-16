@@ -1,0 +1,66 @@
+{
+  "$id":
+  "https://schemas.ory.sh/presets/kratos/quickstart/ldap/identity.schema.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Person",
+  "type": "object",
+  "properties": {
+    "traits": {
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "format": "email",
+          "title": "E-Mail",
+          "minLength": 3,
+          "ory.sh/kratos": {
+            "credentials": {
+              "password": {
+                "identifier": true
+              },
+              "totp": {
+                "account_name": true
+              }
+            },
+            "verification": {
+              "via": "email"
+            },
+            "recovery": {
+              "via": "email"
+            }
+          }
+        },
+        "metadata": {
+          "type": "object",
+          "properties": {
+            "firstname": {
+              "title": "Firstname",
+              "type": "string"
+            },
+            "lastname": {
+              "title": "Lastname",
+              "type": "string"
+            },
+            "title": {
+              "title": "Personal Title",
+              "type": "string"
+            },
+            "email": {
+              "title": "Email",
+              "type": "string"
+            }
+          }
+        },
+        "groups": {
+          "title": "Groups",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": ["email"],
+      "additionalProperties": false
+    }
+  }
+}
