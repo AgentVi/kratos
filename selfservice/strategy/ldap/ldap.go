@@ -11,7 +11,7 @@ import (
 )
 
 var noEntry = ldap.Entry{}
-var noEntries = []*ldap.Entry{}
+var noEntries []*ldap.Entry
 
 func (s *Strategy) ldapLogin(ctx context.Context, username string, password string) (user ldap.Entry, groups []*ldap.Entry, err error) {
 	conf, err := s.Config(ctx)
@@ -33,7 +33,12 @@ func (s *Strategy) ldapLogin(ctx context.Context, username string, password stri
 	if err != nil {
 		return noEntry, noEntries, err
 	}
-	defer l.Close()
+	defer func(l *ldap.Conn) {
+		err := l.Close()
+		if err != nil {
+
+		}
+	}(l)
 
 	s.d.Logger().WithField("UserDN", user.DN).
 		Debug("LDAP User Entry")
