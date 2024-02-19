@@ -1388,7 +1388,7 @@
         },
         "methods": {
           "type": "object",
-          "additionalProperties": true,
+          "additionalProperties": false,
           "properties": {
             "profile": {
               "type": "object",
@@ -1544,6 +1544,39 @@
                     }
                   },
                   "additionalProperties": false
+                }
+              }
+            },
+            "ldap": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "title": "Enables the TOTP method",
+                  "default": false
+                },
+                "config": {
+                  "type": "object",
+                  "title": "LDAP Configuration",
+                  "properties": {
+                    "ldap_url": {
+                      "title": "URL",
+                      "description": "URL is the LDAP URL that begins with the ldap:// protocol prefix, or ldaps:// if the server is communicating over an TLS/SSL connection" ,
+                      "type": "string"
+                    },
+                    "bind_dn": {
+                      "title": "BindDN",
+                      "description": "BindDN are the credentials of the service account that used",
+                      "type": "string"
+                    },
+                    "bind_pw": {
+                      "title": "BindPW",
+                      "description": "BindPW are the credentials of the service account that used",
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": true
                 }
               }
             },
