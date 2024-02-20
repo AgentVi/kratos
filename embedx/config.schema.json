@@ -1553,30 +1553,107 @@
               "properties": {
                 "enabled": {
                   "type": "boolean",
-                  "title": "Enables the TOTP method",
+                  "description": "Enables the LDAP method",
                   "default": false
                 },
                 "config": {
                   "type": "object",
-                  "title": "LDAP Configuration",
+                  "description": "LDAP Configuration",
                   "properties": {
                     "ldap_url": {
-                      "title": "URL",
                       "description": "URL is the LDAP URL that begins with the ldap:// protocol prefix, or ldaps:// if the server is communicating over an TLS/SSL connection" ,
                       "type": "string"
                     },
                     "bind_dn": {
-                      "title": "BindDN",
                       "description": "BindDN are the credentials of the service account that used",
                       "type": "string"
                     },
                     "bind_pw": {
-                      "title": "BindPW",
                       "description": "BindPW are the credentials of the service account that used",
                       "type": "string"
+                    },
+                    "user_search": {
+                      "description": "UserSearch configuration",
+                      "additionalProperties": false,
+                      "type": "object",
+                      "properties": {
+                        "base_dn": {
+                          "title": "",
+                          "description": "BaseDN to start searching, eg. \"ou=people,dc=example,dc=com\"",
+                          "type": "string"
+                        },
+                        "filter": {
+                          "description": "Filter applied on searching (Optional), eg. \"(objectClass=person)\"",
+                          "type": "string"
+                        },
+                        "username": {
+                          "description": "Username attribute for comparing user entries",
+                          "type": "string"
+                        },
+                        "identity_attributes": {
+                          "description": "Extracting identity attributes",
+                          "additionalProperties": false,
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "name" : {
+                                "type": "string"
+                              },
+                              "attr": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "minItems": 1
+                        }
+                      }
+                    },
+                    "group_search": {
+                      "description": "GroupSearch configuration",
+                      "additionalProperties": false,
+                      "type": "object",
+                      "properties": {
+                        "base_dn": {
+                          "description": "BaseDN to start searching, eg. \"ou=groups,dc=example,dc=com\"",
+                          "type": "string"
+                        },
+                        "filter": {
+                          "title": "",
+                          "description": "Filter applied on searching (Optional), eg. \"(objectClass=groupOfUniqueNames)\"",
+                          "type": "string"
+                        },
+                        "name_attr": {
+                          "title": "",
+                          "description": "Represents group name, eg. cn",
+                          "type": "string"
+                        },
+                        "groups_from_user_memberof": {
+                          "title": "",
+                          "description": "Get groups list from user's memberOf attribute",
+                          "type": "boolean"
+                        },
+                        "user_matchers": {
+                          "additionalProperties": false,
+                          "description": "Additional group and user attributes matcher, will be ignored when GroupsFromUserMemberOf is true",
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "user_attr" : {
+                                "type": "string"
+                              },
+                              "group_attr": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "minItems": 1
+                        }
+                      }
                     }
                   },
-                  "additionalProperties": true
+                  "additionalProperties": false
                 }
               }
             },
