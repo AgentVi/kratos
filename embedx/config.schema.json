@@ -1651,6 +1651,27 @@
                           "minItems": 1
                         }
                       }
+                    },
+                    "update_user_identity": {
+                      "description": "Update user identity when the user is authenticated",
+                      "properties": {
+                        "enabled": {
+                          "description": "Enable updating the user identity",
+                          "type": "boolean"
+                        },
+                        "refresh_time": {
+                          "title": "refresh_time",
+                          "description": "The user identity should be refreshed once the user is authenticated and outdated, outdated = last update time + refresh time",
+                          "type": "string",
+                          "pattern": "^([0-9]+(ns|us|ms|s|m|h))+$",
+                          "default": "5m",
+                          "examples": [
+                            "1h",
+                            "5m",
+                            "10s"
+                          ]
+                        }
+                      }
                     }
                   },
                   "additionalProperties": false

@@ -53,22 +53,21 @@ func (s *Strategy) Login(w http.ResponseWriter, r *http.Request, f *login.Flow, 
 		return nil, s.handleLoginError(w, r, f, &p, err)
 	}
 
-	//user, groups, err := s.ldapLogin(r.Context(), p.Identifier, p.Password)
-	user, _, err := s.ldapLogin(r.Context(), p.Identifier, p.Password)
+	user, groups, err := s.ldapLogin(r.Context(), p.Identifier, p.Password)
 	if err != nil {
 		return nil, s.handleLoginError(w, r, f, &p, errors.WithStack(schema.NewInvalidCredentialsError()))
 	}
 
-	//conf, err := s.Config(r.Context())
-	//if err != nil {
-	//	s.d.Logger().WithError(err).Debug("LDAP Config")
-	//	return nil, err
-	//}
+	conf, err := s.Config(r.Context())
+	if err != nil {
+		s.d.Logger().WithError(err).Debug("LDAP Config")
+		return nil, err
+	}
 
 	//shouldRegister := false
 	//shouldUpdateIdentity := false
 
-	userId := user.GetAttributeValue("uid")
+	userId := user.GetAttributeValue(conf.UserSearch.Username)
 	i, _, err = s.d.PrivilegedIdentityPool().FindByCredentialsIdentifier(r.Context(), s.ID(), userId)
 	if err != nil {
 		time.Sleep(x.RandomDelay(s.d.Config().HasherArgon2(r.Context()).ExpectedDuration, s.d.Config().HasherArgon2(r.Context()).ExpectedDeviation))
@@ -79,6 +78,17 @@ func (s *Strategy) Login(w http.ResponseWriter, r *http.Request, f *login.Flow, 
 	f.Active = s.ID()
 	if err = s.d.LoginFlowPersister().UpdateLoginFlow(r.Context(), f); err != nil {
 		return nil, s.handleLoginError(w, r, f, &p, errors.WithStack(herodot.ErrInternalServerError.WithReason("Could not update flow").WithDebug(err.Error())))
+	}
+
+	if conf.UpdateUserIdentity.Enabled &&
+		time.Now().After(i.UpdatedAt.Add(conf.UpdateUserIdentity.RefreshTime.Duration)) {
+		traits, err := s.extractIdentity(r.Context(), user, groups)
+		if err != nil {
+			return nil, err
+		}
+		i.Traits = identity.Traits(traits)
+
+		return i, s.d.PrivilegedIdentityPool().UpdateIdentity(r.Context(), i)
 	}
 
 	//if err != nil && errors.Is(err, sqlcon.ErrNoRows) {
