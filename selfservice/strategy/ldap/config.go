@@ -27,6 +27,7 @@ type Duration struct {
 }
 
 type Configuration struct {
+	SchemaId string `json:"schema_id"`
 	// URL is the LDAP URL that begins with the ldap:// protocol prefix
 	// or ldaps:// if the server is communicating over an TLS/SSL connection
 	URL string `json:"ldap_url"`

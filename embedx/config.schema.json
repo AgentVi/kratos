@@ -1560,6 +1560,10 @@
                   "type": "object",
                   "description": "LDAP Configuration",
                   "properties": {
+                    "schema_id": {
+                      "description": "Sets the identity traits schema id, if not set default schema will be used" ,
+                      "type": "string"
+                    },
                     "ldap_url": {
                       "description": "URL is the LDAP URL that begins with the ldap:// protocol prefix, or ldaps:// if the server is communicating over an TLS/SSL connection" ,
                       "type": "string"
