@@ -795,6 +795,33 @@
         }
       }
     },
+    "selfServiceAfterLDAPLoginMethod": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "default_browser_return_url": {
+          "$ref": "#/definitions/defaultReturnTo"
+        },
+        "hooks": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/selfServiceSessionRevokerHook"
+              },
+              {
+                "$ref": "#/definitions/selfServiceWebHook"
+              },
+              {
+                "$ref": "#/definitions/selfServiceRequireVerifiedAddressHook"
+              }
+            ]
+          },
+          "uniqueItems": true,
+          "additionalItems": false
+        }
+      }
+    },
     "selfServiceAfterRegistrationMethod": {
       "type": "object",
       "additionalProperties": false,
@@ -874,6 +901,9 @@
         },
         "oidc": {
           "$ref": "#/definitions/selfServiceAfterOIDCLoginMethod"
+        },
+        "ldap": {
+          "$ref": "#/definitions/selfServiceAfterLDAPLoginMethod"
         },
         "hooks": {
           "type": "array",
