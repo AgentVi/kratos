@@ -1,11 +1,8 @@
 package ldap
 
 import (
-	"github.com/ory/herodot"
-	"net/http"
-	"time"
-
 	"github.com/gofrs/uuid"
+	"github.com/ory/herodot"
 	"github.com/ory/kratos/identity"
 	"github.com/ory/kratos/schema"
 	"github.com/ory/kratos/selfservice/flow"
@@ -14,7 +11,10 @@ import (
 	"github.com/ory/kratos/ui/node"
 	"github.com/ory/kratos/x"
 	"github.com/ory/x/decoderx"
+	"github.com/ory/x/sqlcon"
 	"github.com/pkg/errors"
+	"net/http"
+	"time"
 )
 
 func (s *Strategy) RegisterLoginRoutes(r *x.RouterPublic) {
@@ -64,25 +64,30 @@ func (s *Strategy) Login(w http.ResponseWriter, r *http.Request, f *login.Flow, 
 		return nil, err
 	}
 
-	//shouldRegister := false
-	//shouldUpdateIdentity := false
+	shouldRegister := false
+	shouldUpdateIdentity := false
 
 	userId := user.GetAttributeValue(conf.UserSearch.Username)
 	i, _, err = s.d.PrivilegedIdentityPool().FindByCredentialsIdentifier(r.Context(), s.ID(), userId)
-	if err != nil {
-		time.Sleep(x.RandomDelay(s.d.Config().HasherArgon2(r.Context()).ExpectedDuration, s.d.Config().HasherArgon2(r.Context()).ExpectedDeviation))
-		return nil, s.handleLoginError(w, r, f, &p, errors.WithStack(schema.NewInvalidCredentialsError()))
-	}
-
-	f.Active = identity.CredentialsTypeLDAP
-	f.Active = s.ID()
-	if err = s.d.LoginFlowPersister().UpdateLoginFlow(r.Context(), f); err != nil {
-		return nil, s.handleLoginError(w, r, f, &p, errors.WithStack(herodot.ErrInternalServerError.WithReason("Could not update flow").WithDebug(err.Error())))
-	}
-
-	if conf.UpdateUserIdentity.Enabled &&
+	if err != nil && errors.Is(err, sqlcon.ErrNoRows) {
+		shouldRegister = true
+	} else if conf.UpdateUserIdentity.Enabled &&
 		time.Now().After(i.UpdatedAt.Add(conf.UpdateUserIdentity.RefreshTime.Duration)) {
-		traits, err := s.extractIdentity(r.Context(), user, groups)
+		shouldUpdateIdentity = true
+	}
+
+	switch {
+	case shouldRegister:
+		aa, err := s.d.RegistrationHandler().NewRegistrationFlow(w, r, flow.TypeBrowser)
+		if err != nil {
+			return nil, err
+		}
+
+		if i, err = s.processRegistration(w, r, aa, user, groups); err != nil {
+			return nil, err
+		}
+	case shouldUpdateIdentity:
+		traits, err := s.extractIdentityTraits(r.Context(), user, groups)
 		if err != nil {
 			return nil, err
 		}
@@ -91,32 +96,11 @@ func (s *Strategy) Login(w http.ResponseWriter, r *http.Request, f *login.Flow, 
 		return i, s.d.PrivilegedIdentityPool().UpdateIdentity(r.Context(), i)
 	}
 
-	//if err != nil && errors.Is(err, sqlcon.ErrNoRows) {
-	//	shouldRegister = true
-	//} else if conf.UpdateUserIdentity.Enabled &&
-	//	time.Now().After(i.UpdatedAt.Add(conf.UpdateUserIdentity.RefreshTime.Duration)) {
-	//	shouldUpdateIdentity = true
-	//}
-	//
-	//switch {
-	//case shouldRegister:
-	//	aa, err := s.d.RegistrationHandler().NewRegistrationFlow(w, r, flow.TypeBrowser)
-	//	if err != nil {
-	//		return nil, err
-	//	}
-	//
-	//	if i, err = s.processRegistration(w, r, aa, user, groups); err != nil {
-	//		return nil, err
-	//	}
-	//case shouldUpdateIdentity:
-	//	traits, err := s.extractIdentity(r.Context(), user, groups)
-	//	if err != nil {
-	//		return nil, err
-	//	}
-	//	i.Traits = identity.Traits(traits)
-	//
-	//	return i, s.d.PrivilegedIdentityPool().UpdateIdentity(r.Context(), i)
-	//}
+	f.Active = identity.CredentialsTypeLDAP
+	f.Active = s.ID()
+	if err = s.d.LoginFlowPersister().UpdateLoginFlow(r.Context(), f); err != nil {
+		return nil, s.handleLoginError(w, r, f, &p, errors.WithStack(herodot.ErrInternalServerError.WithReason("Could not update flow").WithDebug(err.Error())))
+	}
 
 	return i, nil
 }

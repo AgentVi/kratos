@@ -3,10 +3,10 @@ package ldap
 import (
 	"context"
 	"encoding/json"
+	"github.com/ory/kratos/driver/config"
 	"net/http"
 
 	ldap "github.com/go-ldap/ldap/v3"
-	"github.com/ory/kratos/driver/config"
 	"github.com/ory/kratos/identity"
 	"github.com/ory/kratos/selfservice/flow/registration"
 	"github.com/ory/kratos/x"
@@ -46,31 +46,42 @@ func (s *Strategy) Register(w http.ResponseWriter, r *http.Request, f *registrat
 	return nil
 }
 
-func (s *Strategy) extractIdentity(ctx context.Context, user ldap.Entry, groups []*ldap.Entry) (rawjson string, err error) {
+func (s *Strategy) extractIdentityTraits(ctx context.Context, user ldap.Entry, groups []*ldap.Entry) (rawjson string, err error) {
 	conf, err := s.Config(ctx)
 	if err != nil {
 		return "", err
 	}
 
-	identity := struct {
+	// TODO! This structure is strict matching on a specific setup of identityTraits.schema.json for ldap. Make this more generic solution so it fits many different schemas.
+	type group struct {
+		DN   string `json:"dn"`
+		Name string `json:"name"`
+	}
+
+	identityTraits := struct {
 		Username string            `json:"username"`
 		Metadata map[string]string `json:"metadata"`
-		Groups   []string          `json:"groups"`
+		Groups   []group           `json:"groups"`
 	}{
 		Username: user.GetAttributeValue(conf.UserSearch.Username),
 		Metadata: make(map[string]string),
-		Groups:   []string{},
+		Groups:   []group{},
 	}
 
 	for _, list := range conf.UserSearch.IdentityAttributes {
-		identity.Metadata[list.Name] = user.GetAttributeValue(list.Attr)
+		identityTraits.Metadata[list.Name] = user.GetAttributeValue(list.Attr)
 	}
 
-	for _, group := range groups {
-		identity.Groups = append(identity.Groups, group.GetAttributeValue(conf.GroupSearch.NameAttribute))
+	for _, group_ := range groups {
+		g := group{
+			DN:   group_.DN,
+			Name: group_.GetAttributeValue(conf.GroupSearch.NameAttribute),
+		}
+
+		identityTraits.Groups = append(identityTraits.Groups, g)
 	}
 
-	rawid, err := json.Marshal(identity)
+	rawid, err := json.Marshal(identityTraits)
 	if err != nil {
 		return "", err
 	}
@@ -79,18 +90,28 @@ func (s *Strategy) extractIdentity(ctx context.Context, user ldap.Entry, groups 
 }
 
 func (s *Strategy) processRegistration(w http.ResponseWriter, r *http.Request, a *registration.Flow, user ldap.Entry, groups []*ldap.Entry) (*identity.Identity, error) {
-	if _, _, err := s.d.PrivilegedIdentityPool().FindByCredentialsIdentifier(r.Context(), identity.CredentialsTypeLDAP, user.GetAttributeValue("uid")); err == nil {
+	conf, err := s.Config(r.Context())
+	if err != nil {
+		s.d.Logger().WithError(err).Debug("LDAP Config")
+		return nil, err
+	}
+
+	if _, _, err := s.d.PrivilegedIdentityPool().FindByCredentialsIdentifier(r.Context(), identity.CredentialsTypeLDAP, user.GetAttributeValue(conf.UserSearch.Username)); err == nil {
 		return nil, nil
 	}
 
-	i := identity.NewIdentity(config.DefaultIdentityTraitsSchemaID)
-	traits, err := s.extractIdentity(r.Context(), user, groups)
+	var schemaId = config.DefaultIdentityTraitsSchemaID
+	if conf.SchemaId != "" {
+		schemaId = conf.SchemaId
+	}
+	i := identity.NewIdentity(schemaId)
+	traits, err := s.extractIdentityTraits(r.Context(), user, groups)
 	if err != nil {
 		return nil, err
 	}
 	i.Traits = identity.Traits(traits)
 
-	creds, err := NewCredentials(user.GetAttributeValue("uid"))
+	creds, err := NewCredentials(user.GetAttributeValue(conf.UserSearch.Username))
 	if err != nil {
 		return nil, err
 	}
