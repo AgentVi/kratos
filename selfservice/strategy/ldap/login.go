@@ -64,39 +64,49 @@ func (s *Strategy) Login(w http.ResponseWriter, r *http.Request, f *login.Flow, 
 		return nil, err
 	}
 
-	shouldRegister := false
-	shouldUpdateIdentity := false
-
 	userId := user.GetAttributeValue(conf.UserSearch.Username)
+
 	i, _, err = s.d.PrivilegedIdentityPool().FindByCredentialsIdentifier(r.Context(), s.ID(), userId)
 	if err != nil && errors.Is(err, sqlcon.ErrNoRows) {
-		shouldRegister = true
-	} else if conf.UpdateUserIdentity.Enabled &&
-		time.Now().After(i.UpdatedAt.Add(conf.UpdateUserIdentity.RefreshTime.Duration)) {
-		shouldUpdateIdentity = true
-	}
 
-	switch {
-	case shouldRegister:
-		aa, err := s.d.RegistrationHandler().NewRegistrationFlow(w, r, flow.TypeBrowser)
+		// Create new identity in memory, to be able to add the identify if the authorization succeed after login webhook
+		// INFORMATION about the flow
+		// This require webhook and the receiver handle the creation of the identity and send it back as a response
+		// --HAPPY FLOW--
+		// KRATOS
+		// (Login -> Challenge Authentication using LDAP -> Create temp identity -> Send identity information using LDAP after login webhook) -->
+		// WEBHOOK RECEIVER
+		// --> (Challenge authorize and add Identity on receiver end -> Return Identity in webhook response) -->
+		// KRATOS
+		// --> (Create Session and Cookie -> Login Success)
+		//
+		// -- FAIL FLOW --
+		// WEBHOOK RECEIVER
+		// --> (If challenge authorize fail -> Remove Identity if exist on receiver end -> Response with 403 and errormessage) -->
+		// KRATOS
+		// --> (Login failed)
+
+		// TODO! Its also possible to start Registration flow to register a new identity if the authentication success, shell we add that possibility and it to the ldap flow config?
+		i = identity.NewIdentity(identity.CredentialsTypeLDAP.String())
+		traits, err := s.extractIdentityTraits(r.Context(), user, groups)
 		if err != nil {
 			return nil, err
 		}
-
-		if i, err = s.processRegistration(w, r, aa, user, groups); err != nil {
-			return nil, err
-		}
-	case shouldUpdateIdentity:
+		i.Traits = identity.Traits(traits)
+	} else if conf.UpdateUserIdentity.Enabled &&
+		time.Now().After(i.UpdatedAt.Add(conf.UpdateUserIdentity.RefreshTime.Duration)) {
 		traits, err := s.extractIdentityTraits(r.Context(), user, groups)
 		if err != nil {
 			return nil, err
 		}
 		i.Traits = identity.Traits(traits)
 
-		return i, s.d.PrivilegedIdentityPool().UpdateIdentity(r.Context(), i)
+		err = s.d.PrivilegedIdentityPool().UpdateIdentity(r.Context(), i)
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	f.Active = identity.CredentialsTypeLDAP
 	f.Active = s.ID()
 	if err = s.d.LoginFlowPersister().UpdateLoginFlow(r.Context(), f); err != nil {
 		return nil, s.handleLoginError(w, r, f, &p, errors.WithStack(herodot.ErrInternalServerError.WithReason("Could not update flow").WithDebug(err.Error())))

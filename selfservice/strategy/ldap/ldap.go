@@ -89,7 +89,12 @@ func (s *Strategy) ldapUserEntry(ctx context.Context, username string) (found bo
 	if err != nil {
 		return false, noEntry, err
 	}
-	defer l.Close()
+	defer func(l *ldap.Conn) {
+		err := l.Close()
+		if err != nil {
+
+		}
+	}(l)
 
 	if err = l.Bind(conf.BindDN, conf.BindPW); err != nil {
 		return false, noEntry, err

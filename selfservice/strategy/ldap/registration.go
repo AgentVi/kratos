@@ -54,8 +54,8 @@ func (s *Strategy) extractIdentityTraits(ctx context.Context, user ldap.Entry, g
 
 	// TODO! This structure is strict matching on a specific setup of identityTraits.schema.json for ldap. Make this more generic solution so it fits many different schemas.
 	type group struct {
-		DN   string `json:"dn"`
-		Name string `json:"name"`
+		DN string `json:"dn"`
+		Id string `json:"id"`
 	}
 
 	identityTraits := struct {
@@ -73,9 +73,10 @@ func (s *Strategy) extractIdentityTraits(ctx context.Context, user ldap.Entry, g
 	}
 
 	for _, group_ := range groups {
+
 		g := group{
-			DN:   group_.DN,
-			Name: group_.GetAttributeValue(conf.GroupSearch.NameAttribute),
+			DN: group_.DN,
+			Id: group_.GetAttributeValue(conf.GroupSearch.NameAttribute),
 		}
 
 		identityTraits.Groups = append(identityTraits.Groups, g)
