@@ -4,6 +4,7 @@
 package identity
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -454,11 +455,49 @@ func (h *Handler) identityFromCreateIdentityBody(ctx context.Context, cr *Create
 		MetadataPublic:      []byte(cr.MetadataPublic),
 	}
 
-	if err := h.importCredentials(ctx, i, cr.Credentials); err != nil {
-		return nil, err
+	// TODO! Generate a new version of kratos-client-go sdk with added support for LDAP Credentials.
+	// HACK! ory/kratos-client-go v1.0.0 sdk do not support LDAP credentials so we modify the incoming request and add LDAP credentials.
+	if i.SchemaID == CredentialsTypeLDAP.String() {
+		var traits map[string]interface{}
+
+		err := json.Unmarshal(i.Traits, &traits)
+		if err != nil {
+			return nil, err
+		}
+
+		username := traits["username"].(string)
+		cred, err := h.newLDAPCredentials(username)
+		if err != nil {
+			return nil, err
+		}
+
+		i.SetCredentials(CredentialsTypeLDAP, *cred)
+	} else {
+		if err := h.importCredentials(ctx, i, cr.Credentials); err != nil {
+			return nil, err
+		}
 	}
 
 	return i, nil
+}
+
+func (h *Handler) newLDAPCredentials(dn string) (*Credentials, error) {
+	var b bytes.Buffer
+	credentialsConfig := struct {
+		DN string `json:"dn"`
+	}{
+		DN: dn,
+	}
+
+	if err := json.NewEncoder(&b).Encode(credentialsConfig); err != nil {
+		return nil, errors.WithStack(x.PseudoPanic.WithDebugf("Unable to encode LDAP credential options to JSON: %s", err))
+	}
+
+	return &Credentials{
+		Type:        CredentialsTypeLDAP,
+		Identifiers: []string{dn},
+		Config:      b.Bytes(),
+	}, nil
 }
 
 // swagger:route PATCH /admin/identities identity batchPatchIdentities
