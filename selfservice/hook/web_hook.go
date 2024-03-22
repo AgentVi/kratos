@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/gofrs/uuid"
 	"net/http"
 	"time"
 
@@ -415,6 +416,11 @@ func parseWebhookResponse(resp *http.Response, id *identity.Identity) (err error
 
 		if hookResponse.Identity == nil {
 			return nil
+		}
+
+		// Check identity id. If identity has been created under webhook operation the data.identity has no ID here. (Used when using LDAP with pure adapter strategy)
+		if hookResponse.Identity.ID != uuid.Nil {
+			id.ID = hookResponse.Identity.ID
 		}
 
 		if len(hookResponse.Identity.Traits) > 0 {
