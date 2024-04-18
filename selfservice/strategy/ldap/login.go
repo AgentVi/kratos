@@ -55,12 +55,13 @@ func (s *Strategy) Login(w http.ResponseWriter, r *http.Request, f *login.Flow, 
 
 	user, groups, err := s.ldapLogin(r.Context(), p.Identifier, p.Password)
 	if err != nil {
+		s.d.Logger().WithError(err).Error()
 		return nil, s.handleLoginError(w, r, f, &p, errors.WithStack(schema.NewInvalidCredentialsError()))
 	}
 
 	conf, err := s.Config(r.Context())
 	if err != nil {
-		s.d.Logger().WithError(err).Debug("LDAP Config")
+		s.d.Logger().WithError(err).Error("LDAP configuration faulted")
 		return nil, err
 	}
 
@@ -85,18 +86,13 @@ func (s *Strategy) Login(w http.ResponseWriter, r *http.Request, f *login.Flow, 
 		// KRATOS
 		// --> (Login failed)
 
-		// TODO! Its also possible to start Registration flow to register a new identity if the authentication success, shell we add that possibility and it to the ldap flow config?
+		// TODO! Its also possible to start Registration flow to register a new identity if the authentication success, shall we add that possibility and it to the ldap flow config?
 		i = identity.NewIdentity(identity.CredentialsTypeLDAP.String())
-		traits, err := s.extractIdentityTraits(r.Context(), user, groups)
-		if err != nil {
-			return nil, err
-		}
-		i.Traits = identity.Traits(traits)
 	} else if conf.UpdateUserIdentity.Enabled &&
 		time.Now().After(i.UpdatedAt.Add(conf.UpdateUserIdentity.RefreshTime.Duration)) {
 		traits, err := s.extractIdentityTraits(r.Context(), user, groups)
 		if err != nil {
-			return nil, err
+			return nil, herodot.ErrInternalServerError.WithReason("The password credentials could not be decoded properly").WithDebug(err.Error()).WithWrap(err)
 		}
 		i.Traits = identity.Traits(traits)
 
@@ -104,6 +100,15 @@ func (s *Strategy) Login(w http.ResponseWriter, r *http.Request, f *login.Flow, 
 		if err != nil {
 			return nil, err
 		}
+	}
+
+	if !conf.UpdateUserIdentity.Enabled || i.ID == uuid.Nil {
+		// Update traits on every login
+		traits, err := s.extractIdentityTraits(r.Context(), user, groups)
+		if err != nil {
+			return nil, err
+		}
+		i.Traits = identity.Traits(traits)
 	}
 
 	f.Active = s.ID()
