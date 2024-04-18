@@ -210,6 +210,16 @@ func NewNoTOTPDeviceRegistered() error {
 	})
 }
 
+func NewLDAPStatusServiceUnavailable() error {
+	return errors.WithStack(&ValidationError{
+		ValidationError: &jsonschema.ValidationError{
+			Message:     `Unable to connect to the domain server, please contact your IT admin for assistance`,
+			InstancePtr: "#/",
+		},
+		Messages: new(text.Messages).Add(text.NewErrorValidationLdapServiceUnavailable()),
+	})
+}
+
 func NewNoLookupDefined() error {
 	return errors.WithStack(&ValidationError{
 		ValidationError: &jsonschema.ValidationError{
