@@ -3,7 +3,9 @@ package ldap
 import (
 	"context"
 	"fmt"
+	"net"
 	"strings"
+	"time"
 
 	ldap "github.com/go-ldap/ldap/v3"
 	"github.com/ory/herodot"
@@ -12,6 +14,11 @@ import (
 
 var noEntry = ldap.Entry{}
 var noEntries []*ldap.Entry
+
+var dialer = net.Dialer{
+	Timeout: 9 * time.Second, // The default write timeout for the http.Server (see serve.go) is 10 seconds so time need to be lesser than that to handel error message.
+}
+var dailOpts = ldap.DialWithDialer(&dialer)
 
 func (s *Strategy) ldapLogin(ctx context.Context, username string, password string) (user ldap.Entry, groups []*ldap.Entry, err error) {
 	conf, err := s.Config(ctx)
@@ -29,7 +36,7 @@ func (s *Strategy) ldapLogin(ctx context.Context, username string, password stri
 		return noEntry, noEntries, errors.New("User not found")
 	}
 
-	l, err := ldap.DialURL(conf.URL)
+	l, err := ldap.DialURL(conf.URL, dailOpts)
 	if err != nil {
 		return noEntry, noEntries, err
 	}
@@ -85,7 +92,7 @@ func (s *Strategy) ldapUserEntry(ctx context.Context, username string) (found bo
 		Attributes: attrs,
 	}
 
-	l, err := ldap.DialURL(conf.URL)
+	l, err := ldap.DialURL(conf.URL, dailOpts)
 	if err != nil {
 		return false, noEntry, err
 	}
@@ -184,7 +191,7 @@ func (s *Strategy) ldapGroupsUserMatchers(ctx context.Context, user ldap.Entry) 
 		Scope:  ldap.ScopeWholeSubtree,
 	}
 
-	l, err := ldap.DialURL(conf.URL)
+	l, err := ldap.DialURL(conf.URL, dailOpts)
 	if err != nil {
 		return noEntries, err
 	}
@@ -219,7 +226,7 @@ func (s *Strategy) ldapGroupDNEntry(ctx context.Context, groupDN string) (found 
 		Scope:  ldap.ScopeWholeSubtree,
 	}
 
-	l, err := ldap.DialURL(conf.URL)
+	l, err := ldap.DialURL(conf.URL, dailOpts)
 	if err != nil {
 		return false, noEntry, err
 	}
