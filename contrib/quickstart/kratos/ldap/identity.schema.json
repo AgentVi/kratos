@@ -8,45 +8,27 @@
     "traits": {
       "type": "object",
       "properties": {
-        "email": {
+        "username": {
           "type": "string",
-          "format": "email",
-          "title": "E-Mail",
+          "title": "Username",
           "minLength": 3,
           "ory.sh/kratos": {
             "credentials": {
-              "password": {
+              "ldap": {
                 "identifier": true
-              },
-              "totp": {
-                "account_name": true
               }
-            },
-            "verification": {
-              "via": "email"
-            },
-            "recovery": {
-              "via": "email"
             }
           }
         },
         "metadata": {
           "type": "object",
           "properties": {
-            "firstname": {
-              "title": "Firstname",
+            "displayName": {
+              "title": "Display name",
               "type": "string"
             },
-            "lastname": {
-              "title": "Lastname",
-              "type": "string"
-            },
-            "title": {
-              "title": "Personal Title",
-              "type": "string"
-            },
-            "email": {
-              "title": "Email",
+            "dn": {
+              "title": "DN",
               "type": "string"
             }
           }
@@ -55,11 +37,21 @@
           "title": "Groups",
           "type": "array",
           "items": {
-            "type": "string"
+            "type": "object",
+            "properties": {
+              "dn": {
+                "title": "DN",
+                "type": "string"
+              },
+              "id": {
+                "title": "Id ex. sAMAccountName",
+                "type": "string"
+              }
+            }
           }
         }
       },
-      "required": ["email"],
+      "required": ["username"],
       "additionalProperties": false
     }
   }

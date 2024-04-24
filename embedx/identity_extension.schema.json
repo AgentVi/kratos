@@ -38,6 +38,15 @@
                       "type": "boolean"
                     }
                   }
+                },
+                "ldap": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "identifier": {
+                      "type": "boolean"
+                    }
+                  }
                 }
               }
             },
