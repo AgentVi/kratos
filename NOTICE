@@ -1,0 +1,19 @@
+# NOTICE! This version of ory/kratos has been modified to meet the Irisity requirements to support LDAP.
+
+# Added,Modified,Deleted files
+All files under following directory are added
+- kratos/selfservice/strategy/ldap
+- contrib/quickstart/kratos/ldap
+
+# Modified
+- kratos/identity/handler.go
+Added handling for the create identity with Kratos SDK in func identityFromCreateIdentityBody
+
+- kratos/selservice/hook/web_hook.go in func parseWebhookResponse
+Added check for identity.ID
+
+- kratos/embedx
+Added schema for ldap configuration in config.schema.json
+Added schema for ldap configuration extension in identity_extension.schema.json
+
+
