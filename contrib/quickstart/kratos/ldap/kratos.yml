@@ -47,12 +47,12 @@ selfservice:
       enabled: true
     totp:
       config:
-        issuer: irisity.dev
-      enabled: false
+        issuer: Kratos
+      enabled: true
     ldap:
       enabled: true
       config:
-        ldap_url: ldap://localhost:1389
+        ldap_url: ldap://127.0.0.1:1389
         bind_dn: cn=admin,dc=example,dc=org
         bind_pw: adminpassword
         user_search:
@@ -69,10 +69,10 @@ selfservice:
             - name: email
               attr: mail
         group_search:
-          base_dn: ou=root,ou=accounts,ou=irisplus,ou=surveillance,dc=example,dc=org
+          base_dn: ou=groups,dc=example,dc=org
           filter: (objectClass=organizationalUnit)
           name_attr: cn
-          groups_from_user_memberof: true
+          groups_from_user_memberof: false
           user_matchers:
             - user_attr: uid
               group_attr: uniqueMember
@@ -80,6 +80,7 @@ selfservice:
           enabled: true
           refresh_time: 5m
     code:
+      enabled: true
       config:
         lifespan: 20m
 
@@ -115,14 +116,12 @@ selfservice:
       after:
         hooks:
           # Web hook to be called after successful login
-          # The body is a base64 encoding of: function(ctx) { id: ctx.identity.id, user_id: ctx.identity.metadata_public.userId, session_assurance_level: ctx.flow.requested_aal }
-          - hook: web_hook
-            config:
-              url: http://172.29.177.207:8084/v1/hooks/login/after
-              method: POST
-              body: base64://ZnVuY3Rpb24oY3R4KSB7IGlkOiBjdHguaWRlbnRpdHkuaWQsIHVzZXJfaWQ6IGN0eC5pZGVudGl0eS5tZXRhZGF0YV9wdWJsaWMudXNlcklkLCBzZXNzaW9uX2Fzc3VyYW5jZV9sZXZlbDogY3R4LmZsb3cucmVxdWVzdGVkX2FhbCB9
-              response:
-                ignore: true
+
+         # - hook: web_hook
+
+#        ldap:
+#          hooks:
+#            - hook: web_hook
 
     registration:
       enabled: true
@@ -133,9 +132,6 @@ selfservice:
 #          hooks:
 #            - hook: session
 #        oidc:
-#          hooks:
-#            - hook: session
-#        ldap:
 #          hooks:
 #            - hook: session
 
@@ -162,7 +158,7 @@ identity:
   default_schema_id: default
   schemas:
     - id: default
-      url: file:///home/persollid/go/src/github.com/kratos/kratos/contrib/quickstart/kratos/ldap/identity.schema.json
+      url: file:///etc/config/kratos/identity.schema.json
 
 courier:
   smtp:
