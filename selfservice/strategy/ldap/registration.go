@@ -59,11 +59,11 @@ func (s *Strategy) extractIdentityTraits(ctx context.Context, user ldap.Entry, g
 	}
 
 	identityTraits := struct {
-		Username string            `json:"username"`
+		LoginId  string            `json:"loginId"`
 		Metadata map[string]string `json:"metadata"`
 		Groups   []group           `json:"groups"`
 	}{
-		Username: user.GetAttributeValue(conf.UserSearch.Username),
+		LoginId:  user.GetAttributeValue(conf.UserSearch.Username),
 		Metadata: make(map[string]string),
 		Groups:   []group{},
 	}

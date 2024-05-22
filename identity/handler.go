@@ -465,8 +465,8 @@ func (h *Handler) identityFromCreateIdentityBody(ctx context.Context, cr *Create
 			return nil, err
 		}
 
-		username := traits["username"].(string)
-		cred, err := h.newLDAPCredentials(username)
+		loginId := traits["loginId"].(string)
+		cred, err := h.newLDAPCredentials(loginId)
 		if err != nil {
 			return nil, err
 		}

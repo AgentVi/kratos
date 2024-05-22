@@ -8,9 +8,9 @@
     "traits": {
       "type": "object",
       "properties": {
-        "username": {
+        "loginId": {
           "type": "string",
-          "title": "Username",
+          "title": "Login Id",
           "minLength": 3,
           "ory.sh/kratos": {
             "credentials": {
@@ -51,7 +51,7 @@
           }
         }
       },
-      "required": ["username"],
+      "required": ["loginId"],
       "additionalProperties": false
     }
   }
