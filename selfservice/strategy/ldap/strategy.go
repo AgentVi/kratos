@@ -54,6 +54,7 @@ type dependencies interface {
 
 type Strategy struct {
 	d         dependencies
+	ldapDial  ldapDialer
 	validator *validator.Validate
 	dec       *decoderx.HTTP
 }
@@ -61,6 +62,7 @@ type Strategy struct {
 func NewStrategy(d dependencies) *Strategy {
 	return &Strategy{
 		d:         d,
+		ldapDial:  defaultLDAPDialer,
 		validator: validator.New(),
 		dec:       decoderx.NewHTTP(),
 	}
