@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/ory/jsonschema/v3"
 )
@@ -66,6 +67,52 @@ func TestAddSchemaResources(t *testing.T) {
 				}
 			}
 
+		})
+	}
+}
+
+func TestConfigSchema_LDAPSearchBaseConfiguration_ShouldRejectLegacyAndMultiBaseTogether(t *testing.T) {
+	for _, searchConfiguration := range []string{"user_search", "group_search"} {
+		t.Run(searchConfiguration, func(t *testing.T) {
+			// Arrange
+			compiler := jsonschema.NewCompiler()
+			require.NoError(t, AddSchemaResources(compiler, Config))
+			configSchema, err := compiler.Compile(context.Background(), Config.GetSchemaID())
+			require.NoError(t, err)
+			searchSettings := map[string]interface{}{
+				"base_dns": []interface{}{
+					map[string]interface{}{"base_dn": "ou=users,dc=example,dc=com"},
+				},
+			}
+			configuration := map[string]interface{}{
+				"dsn": "memory",
+				"identity": map[string]interface{}{
+					"schemas": []interface{}{
+						map[string]interface{}{
+							"id":  "default",
+							"url": "file:///tmp/identity.schema.json",
+						},
+					},
+				},
+				"selfservice": map[string]interface{}{
+					"default_browser_return_url": "https://example.com/",
+					"methods": map[string]interface{}{
+						"ldap": map[string]interface{}{
+							"config": map[string]interface{}{
+								searchConfiguration: searchSettings,
+							},
+						},
+					},
+				},
+			}
+			require.NoError(t, configSchema.ValidateInterface(configuration))
+			searchSettings["base_dn"] = "ou=legacy,dc=example,dc=com"
+
+			// Act
+			err = configSchema.ValidateInterface(configuration)
+
+			// Assert
+			require.Error(t, err)
 		})
 	}
 }

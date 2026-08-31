@@ -56,6 +56,13 @@ selfservice:
         bind_dn: cn=admin,dc=example,dc=org
         bind_pw: adminpassword
         user_search:
+          # Use base_dns instead when users span multiple branches. Each entry
+          # accepts scope: base_object, single_level, or whole_subtree.
+          # base_dns:
+          #   - base_dn: ou=employees,dc=example,dc=org
+          #     scope: whole_subtree
+          #   - base_dn: ou=contractors,dc=example,dc=org
+          #     scope: single_level
           base_dn: ou=users,dc=example,dc=org
           filter: (objectClass=inetOrgPerson)
           username: uid
@@ -69,9 +76,15 @@ selfservice:
             - name: email
               attr: mail
         group_search:
+          # base_dns is also supported here for groups in multiple branches.
+          # base_dns:
+          #   - base_dn: ou=security-groups,dc=example,dc=org
+          #     scope: whole_subtree
           base_dn: ou=groups,dc=example,dc=org
           filter: (objectClass=organizationalUnit)
           name_attr: cn
+          # memberOf resolves direct groups only; nested and primary AD groups
+          # are intentionally left for follow-up work.
           groups_from_user_memberof: false
           user_matchers:
             - user_attr: uid

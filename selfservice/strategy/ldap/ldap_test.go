@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"testing"
+	"time"
 
 	ldapclient "github.com/go-ldap/ldap/v3"
 	"github.com/ory/kratos/driver/config"
@@ -19,9 +20,10 @@ import (
 )
 
 type ldapConnectionMock struct {
-	bindFunc   func(username string, password string) error
-	closeFunc  func() error
-	searchFunc func(searchRequest *ldapclient.SearchRequest) (*ldapclient.SearchResult, error)
+	bindFunc       func(username string, password string) error
+	closeFunc      func() error
+	searchFunc     func(searchRequest *ldapclient.SearchRequest) (*ldapclient.SearchResult, error)
+	setTimeoutFunc func(timeout time.Duration)
 }
 
 type ldapTestDependencies struct {
@@ -54,12 +56,21 @@ func (m *ldapConnectionMock) Close() error {
 	return m.closeFunc()
 }
 
-func (m *ldapConnectionMock) Search(searchRequest *ldapclient.SearchRequest) (*ldapclient.SearchResult, error) {
+func (m *ldapConnectionMock) SearchWithPaging(searchRequest *ldapclient.SearchRequest, pagingSize uint32) (*ldapclient.SearchResult, error) {
+	if pagingSize != ldapPageSize {
+		return nil, fmt.Errorf("unexpected LDAP page size: %d", pagingSize)
+	}
 	if m.searchFunc == nil {
 		return &ldapclient.SearchResult{}, nil
 	}
 
 	return m.searchFunc(searchRequest)
+}
+
+func (m *ldapConnectionMock) SetTimeout(timeout time.Duration) {
+	if m.setTimeoutFunc != nil {
+		m.setTimeoutFunc(timeout)
+	}
 }
 
 func newLDAPTestConfiguration() *Configuration {
@@ -145,9 +156,10 @@ func TestLDAPGroupSearchFilter_MemberMatcherWithSeparateBaseDN_ShouldUseReturned
 	}
 
 	// Act
-	filter := ldapGroupSearchFilter(conf, user)
+	filter, err := ldapGroupSearchFilter(conf, user)
 
 	// Assert
+	require.NoError(t, err)
 	require.Equal(t, fmt.Sprintf("(&(member=%s)(objectClass=group))", ldapclient.EscapeFilter(user.DN)), filter)
 	assert.NotContains(t, filter, "sAMAccountName=alice,OU=Users")
 }
@@ -160,9 +172,10 @@ func TestLDAPGroupSearchFilter_AttributeMatcher_ShouldUseEscapedAttributeValue(t
 	user.Attributes[1].Values = []string{"12345)(uid=*)"}
 
 	// Act
-	filter := ldapGroupSearchFilter(conf, user)
+	filter, err := ldapGroupSearchFilter(conf, user)
 
 	// Assert
+	require.NoError(t, err)
 	assert.Equal(t, "(&(employeeNumber=12345\\29\\28uid=\\2a\\29)(objectClass=group))", filter)
 }
 
@@ -171,9 +184,10 @@ func TestLDAPLogin_MatcherGroupsWithSeparateBaseDN_ShouldAuthenticateAndReturnGr
 	ldapConfig := newLDAPTestConfiguration()
 	user := newLDAPTestUser()
 	group := &ldapclient.Entry{DN: "CN=Administrators,OU=Groups,DC=example,DC=com"}
-	userSearchClosed := false
+	serviceConnectionClosed := false
 	passwordVerificationClosed := false
-	groupSearchClosed := false
+	searchCount := 0
+	timeoutCount := 0
 	ctx, strategy := newLDAPTestStrategy(t, ldapConfig,
 		&ldapConnectionMock{
 			bindFunc: func(username string, password string) error {
@@ -182,14 +196,29 @@ func TestLDAPLogin_MatcherGroupsWithSeparateBaseDN_ShouldAuthenticateAndReturnGr
 				return nil
 			},
 			closeFunc: func() error {
-				userSearchClosed = true
+				serviceConnectionClosed = true
 				return nil
 			},
+			setTimeoutFunc: func(timeout time.Duration) {
+				assert.Equal(t, ldapRequestTimeout, timeout)
+				timeoutCount++
+			},
 			searchFunc: func(searchRequest *ldapclient.SearchRequest) (*ldapclient.SearchResult, error) {
-				assert.Equal(t, ldapConfig.UserSearch.BaseDN, searchRequest.BaseDN)
-				assert.Equal(t, "(&(sAMAccountName=alice)(objectClass=user))", searchRequest.Filter)
-				assert.Equal(t, []string{"sAMAccountName", "givenName", "employeeID"}, searchRequest.Attributes)
-				return &ldapclient.SearchResult{Entries: []*ldapclient.Entry{&user}}, nil
+				searchCount++
+				assert.Equal(t, ldapSearchTimeLimitSeconds, searchRequest.TimeLimit)
+				switch searchCount {
+				case 1:
+					assert.Equal(t, ldapConfig.UserSearch.BaseDN, searchRequest.BaseDN)
+					assert.Equal(t, "(&(sAMAccountName=alice)(objectClass=user))", searchRequest.Filter)
+					assert.Equal(t, []string{"sAMAccountName", "givenName", "employeeID"}, searchRequest.Attributes)
+					return &ldapclient.SearchResult{Entries: []*ldapclient.Entry{&user}}, nil
+				case 2:
+					assert.Equal(t, ldapConfig.GroupSearch.BaseDN, searchRequest.BaseDN)
+					assert.Equal(t, fmt.Sprintf("(&(member=%s)(objectClass=group))", ldapclient.EscapeFilter(user.DN)), searchRequest.Filter)
+					return &ldapclient.SearchResult{Entries: []*ldapclient.Entry{group}}, nil
+				default:
+					return nil, stderrors.New("unexpected search")
+				}
 			},
 		},
 		&ldapConnectionMock{
@@ -202,21 +231,9 @@ func TestLDAPLogin_MatcherGroupsWithSeparateBaseDN_ShouldAuthenticateAndReturnGr
 				passwordVerificationClosed = true
 				return nil
 			},
-		},
-		&ldapConnectionMock{
-			bindFunc: func(username string, password string) error {
-				assert.Equal(t, ldapConfig.BindDN, username)
-				assert.Equal(t, ldapConfig.BindPW, password)
-				return nil
-			},
-			closeFunc: func() error {
-				groupSearchClosed = true
-				return nil
-			},
-			searchFunc: func(searchRequest *ldapclient.SearchRequest) (*ldapclient.SearchResult, error) {
-				assert.Equal(t, ldapConfig.GroupSearch.BaseDN, searchRequest.BaseDN)
-				assert.Equal(t, fmt.Sprintf("(&(member=%s)(objectClass=group))", ldapclient.EscapeFilter(user.DN)), searchRequest.Filter)
-				return &ldapclient.SearchResult{Entries: []*ldapclient.Entry{group}}, nil
+			setTimeoutFunc: func(timeout time.Duration) {
+				assert.Equal(t, ldapRequestTimeout, timeout)
+				timeoutCount++
 			},
 		},
 	)
@@ -229,9 +246,10 @@ func TestLDAPLogin_MatcherGroupsWithSeparateBaseDN_ShouldAuthenticateAndReturnGr
 	assert.Equal(t, user.DN, actualUser.DN)
 	require.Len(t, groups, 1)
 	assert.Equal(t, group.DN, groups[0].DN)
-	assert.True(t, userSearchClosed)
+	assert.True(t, serviceConnectionClosed)
 	assert.True(t, passwordVerificationClosed)
-	assert.True(t, groupSearchClosed)
+	assert.Equal(t, 2, searchCount)
+	assert.Equal(t, 2, timeoutCount)
 }
 
 func TestLDAPLogin_UserDoesNotExist_ShouldReturnUserNotFoundError(t *testing.T) {
@@ -261,14 +279,16 @@ func TestLDAPLogin_GroupSearchFails_ShouldReturnOperationalError(t *testing.T) {
 	// Arrange
 	ldapConfig := newLDAPTestConfiguration()
 	user := newLDAPTestUser()
+	searchCount := 0
 	ctx, strategy := newLDAPTestStrategy(t, ldapConfig,
 		&ldapConnectionMock{searchFunc: func(searchRequest *ldapclient.SearchRequest) (*ldapclient.SearchResult, error) {
-			return &ldapclient.SearchResult{Entries: []*ldapclient.Entry{&user}}, nil
+			searchCount++
+			if searchCount == 1 {
+				return &ldapclient.SearchResult{Entries: []*ldapclient.Entry{&user}}, nil
+			}
+			return &ldapclient.SearchResult{Entries: []*ldapclient.Entry{{DN: "CN=Partial"}}}, stderrors.New("directory unavailable")
 		}},
 		&ldapConnectionMock{},
-		&ldapConnectionMock{searchFunc: func(searchRequest *ldapclient.SearchRequest) (*ldapclient.SearchResult, error) {
-			return nil, stderrors.New("directory unavailable")
-		}},
 	)
 
 	// Act
@@ -309,30 +329,65 @@ func TestLDAPGroupsFromUserMemberOf_OneKnownAndOneMissingGroup_ShouldReturnKnown
 	ldapConfig := newLDAPTestConfiguration()
 	ldapConfig.GroupSearch.GroupsFromUserMemberOf = true
 	user := newLDAPTestUser()
+	knownGroupDN := "CN=Administrators,OU=External,DC=example,DC=com"
+	missingGroupDN := "CN=Missing,OU=Another Branch,DC=example,DC=com"
 	user.Attributes = append(user.Attributes, &ldapclient.EntryAttribute{
 		Name:   "memberOf",
-		Values: []string{"CN=Administrators,OU=Groups,DC=example,DC=com", "CN=Missing,OU=Groups,DC=example,DC=com"},
+		Values: []string{knownGroupDN, missingGroupDN},
 	})
-	knownGroup := &ldapclient.Entry{DN: "CN=Administrators,OU=Groups,DC=example,DC=com"}
-	_, strategy := newLDAPTestStrategy(t, ldapConfig,
-		&ldapConnectionMock{searchFunc: func(searchRequest *ldapclient.SearchRequest) (*ldapclient.SearchResult, error) {
-			assert.Equal(t, knownGroup.DN, searchRequest.BaseDN)
-			assert.Equal(t, ldapclient.ScopeWholeSubtree, searchRequest.Scope)
+	knownGroup := &ldapclient.Entry{DN: knownGroupDN}
+	_, strategy := newLDAPTestStrategy(t, ldapConfig)
+	searchCount := 0
+	connection := &ldapConnectionMock{searchFunc: func(searchRequest *ldapclient.SearchRequest) (*ldapclient.SearchResult, error) {
+		searchCount++
+		assert.Equal(t, ldapclient.ScopeBaseObject, searchRequest.Scope)
+		assert.Equal(t, "(objectClass=group)", searchRequest.Filter)
+		if searchRequest.BaseDN == knownGroupDN {
 			return &ldapclient.SearchResult{Entries: []*ldapclient.Entry{knownGroup}}, nil
-		}},
-		&ldapConnectionMock{searchFunc: func(searchRequest *ldapclient.SearchRequest) (*ldapclient.SearchResult, error) {
-			assert.Equal(t, "CN=Missing,OU=Groups,DC=example,DC=com", searchRequest.BaseDN)
-			return &ldapclient.SearchResult{}, nil
-		}},
-	)
+		}
+		assert.Equal(t, missingGroupDN, searchRequest.BaseDN)
+		return &ldapclient.SearchResult{}, nil
+	}}
 
 	// Act
-	groups, err := strategy.ldapGroupsFromUserMemberOf(ldapConfig, user)
+	groups, err := strategy.ldapGroupsFromUserMemberOf(ldapConfig, connection, user)
 
 	// Assert
 	require.NoError(t, err)
 	require.Len(t, groups, 1)
 	assert.Equal(t, knownGroup.DN, groups[0].DN)
+	assert.Equal(t, 2, searchCount)
+}
+
+func TestLDAPGroupsFromUserMemberOf_DuplicateDNs_ShouldSearchEachUniqueDNOnce(t *testing.T) {
+	// Arrange
+	ldapConfig := newLDAPTestConfiguration()
+	ldapConfig.GroupSearch.GroupsFromUserMemberOf = true
+	ldapConfig.GroupSearch.Filter = ""
+	user := newLDAPTestUser()
+	groupDN := "CN=Administrators,OU=External,DC=example,DC=com"
+	user.Attributes = append(user.Attributes, &ldapclient.EntryAttribute{
+		Name:   "memberOf",
+		Values: []string{groupDN, "cn=administrators,ou=external,dc=example,dc=com"},
+	})
+	searchCount := 0
+	connection := &ldapConnectionMock{searchFunc: func(searchRequest *ldapclient.SearchRequest) (*ldapclient.SearchResult, error) {
+		searchCount++
+		assert.Equal(t, groupDN, searchRequest.BaseDN)
+		assert.Equal(t, ldapclient.ScopeBaseObject, searchRequest.Scope)
+		assert.Equal(t, "(objectClass=*)", searchRequest.Filter)
+		return &ldapclient.SearchResult{Entries: []*ldapclient.Entry{{DN: groupDN}}}, nil
+	}}
+	_, strategy := newLDAPTestStrategy(t, ldapConfig)
+
+	// Act
+	groups, err := strategy.ldapGroupsFromUserMemberOf(ldapConfig, connection, user)
+
+	// Assert
+	require.NoError(t, err)
+	require.Len(t, groups, 1)
+	assert.Equal(t, groupDN, groups[0].DN)
+	assert.Equal(t, 1, searchCount)
 }
 
 func TestLDAPUserSearchAttributes_MatcherAttributeIsNotIdentityAttribute_ShouldIncludeMatcherAttributeOnce(t *testing.T) {
@@ -437,4 +492,189 @@ func TestLDAPLoginError_ConfigurationFailure_ShouldPreserveError(t *testing.T) {
 
 	// Assert
 	assert.ErrorIs(t, err, configurationFailure)
+}
+
+func TestCombineLDAPFilters_NoConfiguredFilters_ShouldReturnMatchAllFilter(t *testing.T) {
+	// Arrange
+	filters := []string{"", "   "}
+
+	// Act
+	filter := combineLDAPFilters(filters...)
+
+	// Assert
+	assert.Equal(t, "(objectClass=*)", filter)
+}
+
+func TestLDAPGroupSearchFilter_MissingMatcherAttribute_ShouldReturnError(t *testing.T) {
+	// Arrange
+	ldapConfig := newLDAPTestConfiguration()
+	ldapConfig.GroupSearch.UserMatchers = []GroupUserMatcher{{
+		UserAttr:  "missingAttribute",
+		GroupAttr: "employeeNumber",
+	}}
+	user := newLDAPTestUser()
+
+	// Act
+	_, err := ldapGroupSearchFilter(ldapConfig, user)
+
+	// Assert
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missingAttribute")
+}
+
+func TestLDAPSearch_PartialResultWithError_ShouldDiscardEntries(t *testing.T) {
+	// Arrange
+	partialEntry := &ldapclient.Entry{DN: "CN=Partial,DC=example,DC=com"}
+	connection := &ldapConnectionMock{searchFunc: func(searchRequest *ldapclient.SearchRequest) (*ldapclient.SearchResult, error) {
+		return &ldapclient.SearchResult{Entries: []*ldapclient.Entry{partialEntry}}, stderrors.New("size limit exceeded")
+	}}
+	request := newLDAPSearchRequest(resolvedLDAPSearchBase{
+		distinguishedName: "DC=example,DC=com",
+		searchScope:       ldapclient.ScopeWholeSubtree,
+	}, "(objectClass=*)", nil)
+
+	// Act
+	entries, err := ldapSearch(connection, request)
+
+	// Assert
+	require.Error(t, err)
+	assert.Empty(t, entries)
+}
+
+func TestResolveLDAPSearchBases_MultipleBases_ShouldResolveScopes(t *testing.T) {
+	// Arrange
+	configuredBases := []ldapSearchBase{
+		{DistinguishedName: "OU=Employees,DC=example,DC=com"},
+		{DistinguishedName: "OU=Contractors,DC=example,DC=com", SearchScope: ldapScopeSingleLevel},
+		{DistinguishedName: "CN=Service,DC=example,DC=com", SearchScope: ldapScopeBaseObject},
+	}
+
+	// Act
+	searchBases, err := resolveLDAPSearchBases("", configuredBases)
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, []resolvedLDAPSearchBase{
+		{distinguishedName: configuredBases[0].DistinguishedName, searchScope: ldapclient.ScopeWholeSubtree},
+		{distinguishedName: configuredBases[1].DistinguishedName, searchScope: ldapclient.ScopeSingleLevel},
+		{distinguishedName: configuredBases[2].DistinguishedName, searchScope: ldapclient.ScopeBaseObject},
+	}, searchBases)
+}
+
+func TestResolveLDAPSearchBases_LegacyAndMultipleBases_ShouldReturnError(t *testing.T) {
+	// Arrange
+	configuredBases := []ldapSearchBase{{DistinguishedName: "OU=Employees,DC=example,DC=com"}}
+
+	// Act
+	_, err := resolveLDAPSearchBases("DC=example,DC=com", configuredBases)
+
+	// Assert
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot be configured together")
+}
+
+func TestLDAPUserEntry_MultipleSearchBasesWithDuplicateUsername_ShouldReturnError(t *testing.T) {
+	// Arrange
+	ldapConfig := newLDAPTestConfiguration()
+	ldapConfig.UserSearch.BaseDN = ""
+	ldapConfig.UserSearch.BaseDNs = []ldapSearchBase{
+		{DistinguishedName: "OU=Employees,DC=example,DC=com"},
+		{DistinguishedName: "OU=Contractors,DC=example,DC=com", SearchScope: ldapScopeSingleLevel},
+	}
+	firstUser := newLDAPTestUser()
+	secondUser := newLDAPTestUser()
+	secondUser.DN = "CN=Alice Example,OU=Employees,DC=example,DC=com"
+	searchCount := 0
+	connection := &ldapConnectionMock{searchFunc: func(searchRequest *ldapclient.SearchRequest) (*ldapclient.SearchResult, error) {
+		searchCount++
+		if searchCount == 1 {
+			assert.Equal(t, ldapclient.ScopeWholeSubtree, searchRequest.Scope)
+			return &ldapclient.SearchResult{Entries: []*ldapclient.Entry{&firstUser}}, nil
+		}
+		assert.Equal(t, ldapclient.ScopeSingleLevel, searchRequest.Scope)
+		return &ldapclient.SearchResult{Entries: []*ldapclient.Entry{&secondUser}}, nil
+	}}
+	_, strategy := newLDAPTestStrategy(t, ldapConfig)
+
+	// Act
+	found, _, err := strategy.ldapUserEntry(ldapConfig, connection, "alice")
+
+	// Assert
+	require.Error(t, err)
+	assert.ErrorIs(t, err, errLDAPMultipleUsersFound)
+	assert.False(t, found)
+	assert.Equal(t, 2, searchCount)
+}
+
+func TestLDAPGroupsUserMatchers_MultipleSearchBases_ShouldDeduplicateGroups(t *testing.T) {
+	// Arrange
+	ldapConfig := newLDAPTestConfiguration()
+	ldapConfig.GroupSearch.BaseDN = ""
+	ldapConfig.GroupSearch.BaseDNs = []ldapSearchBase{
+		{DistinguishedName: "OU=Security,DC=example,DC=com"},
+		{DistinguishedName: "OU=Distribution,DC=example,DC=com"},
+	}
+	group := &ldapclient.Entry{DN: "CN=Administrators,OU=Security,DC=example,DC=com"}
+	searchCount := 0
+	connection := &ldapConnectionMock{searchFunc: func(searchRequest *ldapclient.SearchRequest) (*ldapclient.SearchResult, error) {
+		searchCount++
+		return &ldapclient.SearchResult{Entries: []*ldapclient.Entry{group}}, nil
+	}}
+	_, strategy := newLDAPTestStrategy(t, ldapConfig)
+
+	// Act
+	groups, err := strategy.ldapGroupsUserMatchers(ldapConfig, connection, newLDAPTestUser())
+
+	// Assert
+	require.NoError(t, err)
+	require.Len(t, groups, 1)
+	assert.Equal(t, group.DN, groups[0].DN)
+	assert.Equal(t, 2, searchCount)
+}
+
+func TestLDAPLogin_MultipleUsers_ShouldReturnInvalidCredentialsWithoutPanic(t *testing.T) {
+	// Arrange
+	ldapConfig := newLDAPTestConfiguration()
+	firstUser := newLDAPTestUser()
+	secondUser := newLDAPTestUser()
+	secondUser.DN = "CN=Other Alice,OU=Users,DC=example,DC=com"
+	ctx, strategy := newLDAPTestStrategy(t, ldapConfig, &ldapConnectionMock{
+		searchFunc: func(searchRequest *ldapclient.SearchRequest) (*ldapclient.SearchResult, error) {
+			return &ldapclient.SearchResult{Entries: []*ldapclient.Entry{&firstUser, &secondUser}}, nil
+		},
+	})
+
+	// Act
+	_, groups, err := strategy.ldapLogin(ctx, "alice", "password")
+
+	// Assert
+	require.Error(t, err)
+	assert.ErrorIs(t, err, errLDAPMultipleUsersFound)
+	assert.Empty(t, groups)
+	expected := pkgerrors.Cause(schema.NewInvalidCredentialsError()).(*schema.ValidationError)
+	actual := pkgerrors.Cause(ldapLoginError(err)).(*schema.ValidationError)
+	assert.Equal(t, expected.Messages[0].Text, actual.Messages[0].Text)
+}
+
+func TestLDAPConfig_MultipleSearchBases_ShouldDecode(t *testing.T) {
+	// Arrange
+	ldapConfig := newLDAPTestConfiguration()
+	ldapConfig.UserSearch.BaseDN = ""
+	ldapConfig.UserSearch.BaseDNs = []ldapSearchBase{{
+		DistinguishedName: "OU=Employees,DC=example,DC=com",
+		SearchScope:       ldapScopeSingleLevel,
+	}}
+	ldapConfig.GroupSearch.BaseDN = ""
+	ldapConfig.GroupSearch.BaseDNs = []ldapSearchBase{{
+		DistinguishedName: "OU=Groups,DC=example,DC=com",
+	}}
+	ctx, strategy := newLDAPTestStrategy(t, ldapConfig)
+
+	// Act
+	decodedConfiguration, err := strategy.Config(ctx)
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, ldapConfig.UserSearch.BaseDNs, decodedConfiguration.UserSearch.BaseDNs)
+	assert.Equal(t, ldapConfig.GroupSearch.BaseDNs, decodedConfiguration.GroupSearch.BaseDNs)
 }

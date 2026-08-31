@@ -40,7 +40,9 @@ func ldapLoginError(err error) error {
 		return errors.WithStack(schema.NewLDAPStatusServiceUnavailable())
 	}
 
-	if errors.Is(err, errLDAPUserNotFound) || ldapclient.IsErrorWithCode(err, ldapclient.LDAPResultInvalidCredentials) {
+	if errors.Is(err, errLDAPUserNotFound) ||
+		errors.Is(err, errLDAPMultipleUsersFound) ||
+		ldapclient.IsErrorWithCode(err, ldapclient.LDAPResultInvalidCredentials) {
 		return errors.WithStack(schema.NewInvalidCredentialsError())
 	}
 
@@ -83,7 +85,11 @@ func (s *Strategy) Login(w http.ResponseWriter, r *http.Request, f *login.Flow, 
 	userId := user.GetAttributeValue(conf.UserSearch.Username)
 
 	i, _, err = s.d.PrivilegedIdentityPool().FindByCredentialsIdentifier(r.Context(), s.ID(), userId)
-	if err != nil && errors.Is(err, sqlcon.ErrNoRows) {
+	if err != nil && !errors.Is(err, sqlcon.ErrNoRows) {
+		return nil, err
+	}
+
+	if errors.Is(err, sqlcon.ErrNoRows) {
 		// Create new identity in memory, to be able to add the identify if the authorization succeed after login webhook
 		// INFORMATION about the flow
 		// This require webhook and the receiver handle the creation of the identity and send it back as a response

@@ -1610,11 +1610,35 @@
                       "description": "UserSearch configuration",
                       "additionalProperties": false,
                       "type": "object",
+                      "not": {
+                        "required": ["base_dn", "base_dns"]
+                      },
                       "properties": {
                         "base_dn": {
                           "title": "",
                           "description": "BaseDN to start searching, eg. \"ou=people,dc=example,dc=com\"",
                           "type": "string"
+                        },
+                        "base_dns": {
+                          "description": "Optional list of user search bases with per-base scope. Cannot be combined with base_dn.",
+                          "type": "array",
+                          "minItems": 1,
+                          "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["base_dn"],
+                            "properties": {
+                              "base_dn": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "scope": {
+                                "type": "string",
+                                "enum": ["base_object", "single_level", "whole_subtree"],
+                                "default": "whole_subtree"
+                              }
+                            }
+                          }
                         },
                         "filter": {
                           "description": "Filter applied on searching (Optional), eg. \"(objectClass=person)\"",
@@ -1647,10 +1671,34 @@
                       "description": "GroupSearch configuration",
                       "additionalProperties": false,
                       "type": "object",
+                      "not": {
+                        "required": ["base_dn", "base_dns"]
+                      },
                       "properties": {
                         "base_dn": {
                           "description": "BaseDN to start searching, eg. \"ou=groups,dc=example,dc=com\"",
                           "type": "string"
+                        },
+                        "base_dns": {
+                          "description": "Optional list of group search bases with per-base scope. Cannot be combined with base_dn.",
+                          "type": "array",
+                          "minItems": 1,
+                          "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["base_dn"],
+                            "properties": {
+                              "base_dn": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "scope": {
+                                "type": "string",
+                                "enum": ["base_object", "single_level", "whole_subtree"],
+                                "default": "whole_subtree"
+                              }
+                            }
+                          }
                         },
                         "filter": {
                           "title": "",
@@ -1664,7 +1712,7 @@
                         },
                         "groups_from_user_memberof": {
                           "title": "",
-                          "description": "Get groups list from user's memberOf attribute",
+                          "description": "Get direct groups from the user's memberOf attribute. Active Directory nested and primary groups are not expanded.",
                           "type": "boolean"
                         },
                         "user_matchers": {

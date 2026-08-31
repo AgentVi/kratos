@@ -7,37 +7,40 @@ import (
 	"strings"
 	"time"
 
-	ldap "github.com/go-ldap/ldap/v3"
-	"github.com/ory/herodot"
+	ldapclient "github.com/go-ldap/ldap/v3"
 	"github.com/pkg/errors"
 )
 
-var noEntry = ldap.Entry{}
-var noEntries []*ldap.Entry
+const (
+	ldapPageSize               = 500
+	ldapSearchTimeLimitSeconds = 8
+	ldapRequestTimeout         = 8 * time.Second
+)
 
-// errLDAPUserNotFound keeps an unknown directory user indistinguishable from an invalid password at the login boundary.
-var errLDAPUserNotFound = errors.New("LDAP user not found")
+var (
+	noEntry   = ldapclient.Entry{}
+	noEntries []*ldapclient.Entry
+
+	errLDAPUserNotFound       = errors.New("LDAP user not found")
+	errLDAPMultipleUsersFound = errors.New("multiple LDAP users found")
+)
 
 var dialer = net.Dialer{
-	Timeout: 9 * time.Second, // The default write timeout for the http.Server (see serve.go) is 10 seconds so time need to be lesser than that to handel error message.
+	Timeout: 9 * time.Second,
 }
-var dailOpts = ldap.DialWithDialer(&dialer)
+var dialOptions = ldapclient.DialWithDialer(&dialer)
 
-// ldapConnection is the small portion of an LDAP connection used by this strategy.
-// Keeping the directory transport behind this interface lets the login flow be
-// exercised without requiring a live LDAP server.
 type ldapConnection interface {
 	Bind(username string, password string) error
 	Close() error
-	Search(searchRequest *ldap.SearchRequest) (*ldap.SearchResult, error)
+	SearchWithPaging(searchRequest *ldapclient.SearchRequest, pagingSize uint32) (*ldapclient.SearchResult, error)
+	SetTimeout(timeout time.Duration)
 }
 
-// ldapDialer creates the connections used for user lookup, password verification,
-// and group lookup. Production strategies use defaultLDAPDialer.
-type ldapDialer func(url string, options ...ldap.DialOpt) (ldapConnection, error)
+type ldapDialer func(url string, options ...ldapclient.DialOpt) (ldapConnection, error)
 
-func defaultLDAPDialer(url string, options ...ldap.DialOpt) (ldapConnection, error) {
-	return ldap.DialURL(url, options...)
+func defaultLDAPDialer(url string, options ...ldapclient.DialOpt) (ldapConnection, error) {
+	return ldapclient.DialURL(url, options...)
 }
 
 type ldapOperationalError struct {
@@ -61,14 +64,14 @@ func isLDAPOperationalError(err error) bool {
 	return errors.As(err, &operationalError)
 }
 
-// ldapUserSearchAttributes collects every user attribute needed after the user search.
-// Matchers may use an attribute that is neither the username nor an identity trait,
-// so it must be requested explicitly before group resolution begins.
-func ldapUserSearchAttributes(conf *Configuration) []string {
-	attributes := make([]string, 0, 2+len(conf.UserSearch.IdentityAttributes)+len(conf.GroupSearch.UserMatchers))
+func ldapUserSearchAttributes(configuration *Configuration) []string {
+	attributes := make([]string, 0, 2+len(configuration.UserSearch.IdentityAttributes)+len(configuration.GroupSearch.UserMatchers))
 	addedAttributes := make(map[string]struct{}, cap(attributes))
 
 	addAttribute := func(attribute string) {
+		if attribute == "" {
+			return
+		}
 		if _, found := addedAttributes[attribute]; found {
 			return
 		}
@@ -77,18 +80,18 @@ func ldapUserSearchAttributes(conf *Configuration) []string {
 		attributes = append(attributes, attribute)
 	}
 
-	addAttribute(conf.UserSearch.Username)
+	addAttribute(configuration.UserSearch.Username)
 
-	if conf.GroupSearch.GroupsFromUserMemberOf {
+	if configuration.GroupSearch.GroupsFromUserMemberOf {
 		addAttribute("memberOf")
 	}
 
-	for _, identityAttribute := range conf.UserSearch.IdentityAttributes {
+	for _, identityAttribute := range configuration.UserSearch.IdentityAttributes {
 		addAttribute(identityAttribute.Attr)
 	}
 
-	if !conf.GroupSearch.GroupsFromUserMemberOf {
-		for _, matcher := range conf.GroupSearch.UserMatchers {
+	if !configuration.GroupSearch.GroupsFromUserMemberOf {
+		for _, matcher := range configuration.GroupSearch.UserMatchers {
 			addAttribute(matcher.UserAttr)
 		}
 	}
@@ -96,219 +99,261 @@ func ldapUserSearchAttributes(conf *Configuration) []string {
 	return attributes
 }
 
-func ldapGroupSearchFilter(conf *Configuration, user ldap.Entry) string {
-	matchFilters := make([]string, 0, len(conf.GroupSearch.UserMatchers))
-	for _, matcher := range conf.GroupSearch.UserMatchers {
-		switch matcher.GroupAttr {
-		case "uniqueMember", "member":
-			// LDAP group membership attributes contain the complete distinguished name,
-			// including any nested user OUs. Rebuilding it from user_search.base_dn
-			// breaks installations where users and groups use separate branches.
-			matchFilters = append(matchFilters, fmt.Sprintf("(%s=%s)", matcher.GroupAttr, ldap.EscapeFilter(user.DN)))
-		default:
-			matchFilters = append(matchFilters, fmt.Sprintf("(%s=%s)", matcher.GroupAttr, ldap.EscapeFilter(user.GetAttributeValue(matcher.UserAttr))))
+func ldapGroupSearchAttributes(configuration *Configuration) []string {
+	if configuration.GroupSearch.NameAttribute == "" {
+		return nil
+	}
+	return []string{configuration.GroupSearch.NameAttribute}
+}
+
+func combineLDAPFilters(filters ...string) string {
+	nonEmptyFilters := make([]string, 0, len(filters))
+	for _, filter := range filters {
+		if strings.TrimSpace(filter) != "" {
+			nonEmptyFilters = append(nonEmptyFilters, filter)
 		}
 	}
 
-	return fmt.Sprintf("(&%s%s)", strings.Join(matchFilters, ""), conf.GroupSearch.Filter)
+	switch len(nonEmptyFilters) {
+	case 0:
+		return "(objectClass=*)"
+	case 1:
+		return nonEmptyFilters[0]
+	default:
+		return fmt.Sprintf("(&%s)", strings.Join(nonEmptyFilters, ""))
+	}
 }
 
-func (s *Strategy) ldapLogin(ctx context.Context, username string, password string) (user ldap.Entry, groups []*ldap.Entry, err error) {
-	// Use one configuration snapshot for user lookup, password verification, and group lookup.
-	conf, err := s.Config(ctx)
+func ldapGroupSearchFilter(configuration *Configuration, user ldapclient.Entry) (string, error) {
+	matchFilters := make([]string, 0, len(configuration.GroupSearch.UserMatchers))
+	for _, matcher := range configuration.GroupSearch.UserMatchers {
+		switch matcher.GroupAttr {
+		case "uniqueMember", "member":
+			matchFilters = append(matchFilters, fmt.Sprintf("(%s=%s)", matcher.GroupAttr, ldapclient.EscapeFilter(user.DN)))
+		default:
+			userAttributeValue := user.GetAttributeValue(matcher.UserAttr)
+			if userAttributeValue == "" {
+				return "", errors.Errorf("LDAP user result is missing group matcher attribute %q", matcher.UserAttr)
+			}
+			matchFilters = append(matchFilters, fmt.Sprintf("(%s=%s)", matcher.GroupAttr, ldapclient.EscapeFilter(userAttributeValue)))
+		}
+	}
+
+	return combineLDAPFilters(append(matchFilters, configuration.GroupSearch.Filter)...), nil
+}
+
+func newLDAPSearchRequest(searchBase resolvedLDAPSearchBase, filter string, attributes []string) *ldapclient.SearchRequest {
+	return ldapclient.NewSearchRequest(
+		searchBase.distinguishedName,
+		searchBase.searchScope,
+		ldapclient.NeverDerefAliases,
+		0,
+		ldapSearchTimeLimitSeconds,
+		false,
+		filter,
+		attributes,
+		nil,
+	)
+}
+
+func ldapSearch(connection ldapConnection, request *ldapclient.SearchRequest) ([]*ldapclient.Entry, error) {
+	result, err := connection.SearchWithPaging(request, ldapPageSize)
+	if err != nil {
+		return noEntries, err
+	}
+	if result == nil {
+		return noEntries, errors.New("LDAP search returned no result")
+	}
+
+	return result.Entries, nil
+}
+
+func (s *Strategy) openLDAPConnection(configuration *Configuration) (ldapConnection, error) {
+	connection, err := s.ldapDial(configuration.URL, dialOptions)
+	if err != nil {
+		return nil, err
+	}
+	connection.SetTimeout(ldapRequestTimeout)
+	return connection, nil
+}
+
+func (s *Strategy) closeLDAPConnection(connection ldapConnection) {
+	if err := connection.Close(); err != nil {
+		s.d.Logger().WithError(err).Debug("Could not close LDAP connection")
+	}
+}
+
+func (s *Strategy) ldapLogin(ctx context.Context, username string, password string) (user ldapclient.Entry, groups []*ldapclient.Entry, err error) {
+	configuration, err := s.Config(ctx)
 	if err != nil {
 		s.d.Logger().WithError(err).Debug("LDAP Config")
 		return noEntry, noEntries, err
 	}
 
-	found, user, err := s.ldapUserEntry(conf, username)
+	serviceConnection, err := s.openLDAPConnection(configuration)
 	if err != nil {
 		return noEntry, noEntries, newLDAPOperationalError(err)
 	}
+	defer s.closeLDAPConnection(serviceConnection)
 
+	if err := serviceConnection.Bind(configuration.BindDN, configuration.BindPW); err != nil {
+		return noEntry, noEntries, newLDAPOperationalError(err)
+	}
+
+	found, user, err := s.ldapUserEntry(configuration, serviceConnection, username)
+	if err != nil {
+		if errors.Is(err, errLDAPMultipleUsersFound) {
+			return noEntry, noEntries, err
+		}
+		return noEntry, noEntries, newLDAPOperationalError(err)
+	}
 	if !found {
 		return noEntry, noEntries, errLDAPUserNotFound
 	}
 
-	l, err := s.ldapDial(conf.URL, dailOpts)
-	if err != nil {
+	s.d.Logger().WithField("UserDN", user.DN).Debug("LDAP User Entry")
+
+	if err := s.verifyLDAPPassword(configuration, user.DN, password); err != nil {
+		if ldapclient.IsErrorWithCode(err, ldapclient.LDAPResultInvalidCredentials) {
+			return noEntry, noEntries, err
+		}
 		return noEntry, noEntries, newLDAPOperationalError(err)
 	}
-	defer func(l ldapConnection) {
-		err := l.Close()
-		if err != nil {
 
-		}
-	}(l)
-
-	s.d.Logger().WithField("UserDN", user.DN).
-		Debug("LDAP User Entry")
-
-	err = l.Bind(user.DN, password)
+	groups, err = s.ldapGroupEntries(configuration, serviceConnection, user)
 	if err != nil {
-		// An invalid bind is an authentication failure. Any other bind result means
-		// the directory could not complete the login and must not look like bad credentials.
-		if !ldap.IsErrorWithCode(err, ldap.LDAPResultInvalidCredentials) {
-			return noEntry, noEntries, newLDAPOperationalError(err)
-		}
-
-		return noEntry, noEntries, err
-	}
-
-	groups, err = s.ldapGroupEntries(conf, user)
-	if err != nil {
-		// Do not continue with a partial result: callers may refresh stored traits
-		// from this group list, so an LDAP failure must never become an empty list.
 		return user, noEntries, newLDAPOperationalError(err)
 	}
 
 	return user, groups, nil
 }
 
-func (s *Strategy) ldapUserEntry(conf *Configuration, username string) (found bool, user ldap.Entry, err error) {
-	filter := fmt.Sprintf("(&(%s=%s)%s)",
-		conf.UserSearch.Username,
-		ldap.EscapeFilter(username),
-		conf.UserSearch.Filter,
+func (s *Strategy) verifyLDAPPassword(configuration *Configuration, userDN string, password string) error {
+	connection, err := s.openLDAPConnection(configuration)
+	if err != nil {
+		return err
+	}
+	defer s.closeLDAPConnection(connection)
+
+	return connection.Bind(userDN, password)
+}
+
+func (s *Strategy) ldapUserEntry(configuration *Configuration, connection ldapConnection, username string) (found bool, user ldapclient.Entry, err error) {
+	filter := combineLDAPFilters(
+		fmt.Sprintf("(%s=%s)", configuration.UserSearch.Username, ldapclient.EscapeFilter(username)),
+		configuration.UserSearch.Filter,
 	)
-
-	req := &ldap.SearchRequest{
-		BaseDN:     conf.UserSearch.BaseDN,
-		Filter:     filter,
-		Scope:      ldap.ScopeWholeSubtree,
-		Attributes: ldapUserSearchAttributes(conf),
-	}
-
-	l, err := s.ldapDial(conf.URL, dailOpts)
+	searchBases, err := resolveLDAPSearchBases(configuration.UserSearch.BaseDN, configuration.UserSearch.BaseDNs)
 	if err != nil {
 		return false, noEntry, err
 	}
-	defer func(l ldapConnection) {
-		err := l.Close()
+
+	var foundUser *ldapclient.Entry
+	for _, searchBase := range searchBases {
+		entries, err := ldapSearch(connection, newLDAPSearchRequest(searchBase, filter, ldapUserSearchAttributes(configuration)))
 		if err != nil {
-
+			return false, noEntry, errors.Wrapf(err, "could not search for LDAP user %q", username)
 		}
-	}(l)
 
-	if err = l.Bind(conf.BindDN, conf.BindPW); err != nil {
-		return false, noEntry, err
+		for _, entry := range entries {
+			if foundUser != nil {
+				return false, noEntry, errors.Wrapf(errLDAPMultipleUsersFound, "username %q", username)
+			}
+			foundUser = entry
+		}
 	}
 
-	resp, err := l.Search(req)
-	if err != nil {
-		err = errors.WithStack(herodot.ErrBadRequest.
-			WithReasonf("Could not search for the identity: %s", ldap.EscapeFilter(username)).WithDebug(err.Error()))
-		s.d.Logger().WithError(err)
-		return false, noEntry, err
-	}
-
-	switch n := len(resp.Entries); n {
-	case 0:
+	if foundUser == nil {
 		return false, noEntry, nil
-	case 1:
-		user = *resp.Entries[0]
-		return true, user, nil
-	default:
-		err = errors.WithStack(herodot.ErrBadRequest.
-			WithReasonf("Found multiple entries: %s", ldap.EscapeFilter(username)).WithDebug(err.Error()))
-		return false, noEntry, err
-	}
-}
-
-func (s *Strategy) ldapGroupEntries(conf *Configuration, user ldap.Entry) (groups []*ldap.Entry, err error) {
-	switch {
-	case conf.GroupSearch.GroupsFromUserMemberOf:
-		groups, err = s.ldapGroupsFromUserMemberOf(conf, user)
-	default:
-		groups, err = s.ldapGroupsUserMatchers(conf, user)
 	}
 
-	return groups, err
+	return true, *foundUser, nil
 }
 
-func (s *Strategy) ldapGroupsFromUserMemberOf(conf *Configuration, user ldap.Entry) (groups []*ldap.Entry, err error) {
-	groups = noEntries
+func (s *Strategy) ldapGroupEntries(configuration *Configuration, connection ldapConnection, user ldapclient.Entry) ([]*ldapclient.Entry, error) {
+	if configuration.GroupSearch.GroupsFromUserMemberOf {
+		return s.ldapGroupsFromUserMemberOf(configuration, connection, user)
+	}
 
-	for _, memberOf := range user.GetAttributeValues("memberOf") {
-		found, group, err := s.ldapGroupDNEntry(conf, memberOf)
-		if err != nil {
-			return noEntries, err
+	return s.ldapGroupsUserMatchers(configuration, connection, user)
+}
+
+func (s *Strategy) ldapGroupsFromUserMemberOf(configuration *Configuration, connection ldapConnection, user ldapclient.Entry) ([]*ldapclient.Entry, error) {
+	memberOfValues := uniqueStringsFold(user.GetAttributeValues("memberOf"))
+	if len(memberOfValues) == 0 {
+		return noEntries, nil
+	}
+
+	groups := make([]*ldapclient.Entry, 0, len(memberOfValues))
+	filter := combineLDAPFilters(configuration.GroupSearch.Filter)
+	for _, groupDN := range memberOfValues {
+		searchBase := resolvedLDAPSearchBase{
+			distinguishedName: groupDN,
+			searchScope:       ldapclient.ScopeBaseObject,
 		}
-
-		if found {
-			groups = append(groups, &group)
+		entries, err := ldapSearch(connection, newLDAPSearchRequest(searchBase, filter, ldapGroupSearchAttributes(configuration)))
+		if err != nil {
+			return noEntries, errors.Wrapf(err, "could not resolve LDAP memberOf group %q", groupDN)
+		}
+		if len(entries) > 1 {
+			return noEntries, errors.Errorf("found multiple LDAP groups for memberOf distinguished name %q", groupDN)
+		}
+		if len(entries) == 1 {
+			groups = append(groups, entries[0])
 		}
 	}
 
 	return groups, nil
 }
 
-func (s *Strategy) ldapGroupsUserMatchers(conf *Configuration, user ldap.Entry) (groups []*ldap.Entry, err error) {
-	groups = noEntries
-
-	req := &ldap.SearchRequest{
-		BaseDN: conf.GroupSearch.BaseDN,
-		Filter: ldapGroupSearchFilter(conf, user),
-		Scope:  ldap.ScopeWholeSubtree,
-	}
-
-	l, err := s.ldapDial(conf.URL, dailOpts)
+func (s *Strategy) ldapGroupsUserMatchers(configuration *Configuration, connection ldapConnection, user ldapclient.Entry) ([]*ldapclient.Entry, error) {
+	filter, err := ldapGroupSearchFilter(configuration, user)
 	if err != nil {
 		return noEntries, err
 	}
-	defer l.Close()
-
-	if err = l.Bind(conf.BindDN, conf.BindPW); err != nil {
-		return noEntries, err
-	}
-
-	resp, err := l.Search(req)
+	searchBases, err := resolveLDAPSearchBases(configuration.GroupSearch.BaseDN, configuration.GroupSearch.BaseDNs)
 	if err != nil {
-		err = errors.WithStack(herodot.ErrBadRequest.
-			WithReasonf("Could not search for the identity: %#v", conf.GroupSearch.UserMatchers).WithDebug(err.Error()))
-		s.d.Logger().WithError(err)
 		return noEntries, err
 	}
 
-	return resp.Entries, nil
+	groups := make([]*ldapclient.Entry, 0)
+	seenGroupDNs := make(map[string]struct{})
+	for _, searchBase := range searchBases {
+		entries, err := ldapSearch(connection, newLDAPSearchRequest(searchBase, filter, ldapGroupSearchAttributes(configuration)))
+		if err != nil {
+			return noEntries, errors.Wrapf(err, "could not search LDAP groups using matchers %#v", configuration.GroupSearch.UserMatchers)
+		}
+		groups = appendUniqueLDAPEntries(groups, seenGroupDNs, entries)
+	}
+
+	return groups, nil
 }
 
-func (s *Strategy) ldapGroupDNEntry(conf *Configuration, groupDN string) (found bool, group ldap.Entry, err error) {
-	filter := fmt.Sprintf("(&%s)", conf.GroupSearch.Filter)
-
-	req := &ldap.SearchRequest{
-		BaseDN: groupDN,
-		Filter: filter,
-		Scope:  ldap.ScopeWholeSubtree,
+func uniqueStringsFold(values []string) []string {
+	uniqueValues := make([]string, 0, len(values))
+	seenValues := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		key := strings.ToLower(value)
+		if _, found := seenValues[key]; found {
+			continue
+		}
+		seenValues[key] = struct{}{}
+		uniqueValues = append(uniqueValues, value)
 	}
+	return uniqueValues
+}
 
-	l, err := s.ldapDial(conf.URL, dailOpts)
-	if err != nil {
-		return false, noEntry, err
+func appendUniqueLDAPEntries(existingEntries []*ldapclient.Entry, seenEntryDNs map[string]struct{}, entries []*ldapclient.Entry) []*ldapclient.Entry {
+	for _, entry := range entries {
+		if entry == nil {
+			continue
+		}
+		entryDN := strings.ToLower(entry.DN)
+		if _, found := seenEntryDNs[entryDN]; found {
+			continue
+		}
+		seenEntryDNs[entryDN] = struct{}{}
+		existingEntries = append(existingEntries, entry)
 	}
-	defer l.Close()
-
-	if err = l.Bind(conf.BindDN, conf.BindPW); err != nil {
-		return false, noEntry, err
-	}
-
-	resp, err := l.Search(req)
-	if err != nil {
-		err = errors.WithStack(herodot.ErrBadRequest.
-			WithReasonf("Could not search for the identity: %s", groupDN).WithDebug(err.Error()))
-		s.d.Logger().WithError(err)
-		return false, noEntry, err
-	}
-
-	switch n := len(resp.Entries); n {
-	case 0:
-		return false, noEntry, nil
-	case 1:
-		group = *resp.Entries[0]
-		return true, group, nil
-	default:
-		err = errors.WithStack(herodot.ErrBadRequest.
-			WithReasonf("Found multiple entries: %s", groupDN).WithDebug(err.Error()))
-		return false, noEntry, err
-	}
+	return existingEntries
 }
