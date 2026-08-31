@@ -272,6 +272,88 @@ against `ou=groups,dc=example,dc=org`; the commented-out `base_dns` blocks in
 that file show how to opt into multi-branch search bases instead of the
 single `base_dn`.
 
+## Standard LDAP compatibility
+
+An assessment of this strategy against LDAPv3 (RFC 4510-4519) and RFC 2696
+(paged results), focused on where behavior depends on generic directory
+features vs. vendor-specific (mostly Active Directory) conventions.
+
+### Solidly standard-compliant
+
+- **Bind/search/bind pattern**: simple bind (RFC 4513) with the service
+  account, a paged search, then a second simple bind to verify the user's
+  password. This is the same pattern any `ldapsearch`-based tool uses;
+  nothing here assumes Active Directory.
+- **Filters**: built with `ldapclient.EscapeFilter` (RFC 4515-correct
+  escaping); `combineLDAPFilters` defaults to `(objectClass=*)` when nothing
+  is configured, and `objectClass` is mandatory on every entry (RFC 4512), so
+  this matches on any compliant server.
+- **The default group-matching path (`user_matchers`)** targets
+  vendor-neutral schemas: `member`/`uniqueMember` map to
+  `groupOfNames`/`groupOfUniqueNames` (RFC 4519), and the generic
+  attribute-equality branch covers RFC 2307 `posixGroup`-style `memberUid`.
+  This is the idiomatic way to model groups on OpenLDAP/389-ds/FreeIPA, not
+  an AD-shaped assumption.
+- **Scopes**: `base_object`/`single_level`/`whole_subtree` map directly onto
+  the three standard LDAP search scopes; multi-base search (`base_dns`) is a
+  generic fan-out over several DIT branches, not tied to any vendor's tree
+  layout.
+- **Paging degrades gracefully**: the RFC 2696 control is added
+  non-critically (go-ldap's `ControlPaging` defaults `Criticality` to
+  `false`), so a server or proxy that doesn't support paged results simply
+  ignores the control and returns one unpaged response instead of failing
+  the search.
+- The `memberOf`-DN resolution does a plain base-object search by DN, which
+  is itself standard LDAP, not an AD-only lookup mechanism.
+
+### Compatibility gaps worth knowing about
+
+1. **`memberOf` isn't a standard attribute.** It has no equivalent in core
+   LDAP schema; it's natively maintained by Active Directory, and on
+   OpenLDAP only exists if the `memberof` overlay is loaded (not a default
+   install). `groups_from_user_memberof: true` will silently return zero
+   groups on a stock OpenLDAP/389-ds server without that overlay — a
+   directory-side prerequisite this strategy never checks or warns about.
+2. **Case-sensitive attribute-name handling** in two places, even though
+   RFC 4512 says attribute descriptors are case-insensitive:
+   - `ldapGroupSearchFilter`'s `switch matcher.GroupAttr { case
+     "uniqueMember", "member": ... }` (`ldap.go`) is a literal string match.
+     Configuring `"Member"` or `"UniqueMember"` (an equally valid form)
+     silently falls into the generic-attribute branch and builds the wrong
+     filter (comparing against a user attribute value instead of the user's
+     DN).
+   - Every attribute read goes through go-ldap's `GetAttributeValue`/
+     `GetAttributeValues`, which do exact-case matching, not
+     `GetEqualFoldAttributeValue`. A server or proxy that echoes attribute
+     names back in a different case than requested (rare, but
+     standards-legal) would silently yield empty values.
+3. **No StartTLS support.** Only implicit TLS via `ldaps://` (go-ldap's
+   default dial options, with no custom CA/client-cert/skip-verify knobs
+   exposed) or plaintext `ldap://`. RFC 4511 formally deprecated `ldaps://`
+   in favor of the StartTLS extended operation, and most internal
+   deployments with self-signed CAs need custom TLS trust configuration that
+   isn't exposed here.
+4. **Simple bind only** — no SASL/GSSAPI. Fine per spec (simple bind is a
+   first-class standard mechanism), but the service account credential must
+   always be a plaintext bind DN + password.
+5. **Alias dereferencing is hardcoded to `NeverDerefAliases`**, not
+   configurable — one of four standard policies (RFC 4511 §4.5.1.3);
+   directories that rely on alias entries to point at users/groups elsewhere
+   in the tree won't be traversed.
+
+### Bottom line
+
+For the primary (`user_matchers`) path, this is a vendor-neutral LDAPv3
+client that works against OpenLDAP, 389-ds, FreeIPA, or AD unmodified, using
+only core protocol features. The gaps are at the edges: the optional
+`memberOf` mode assumes a non-core, directory-dependent attribute; two spots
+do case-sensitive attribute-name comparisons where the standard calls for
+case-insensitivity; and TLS is limited to implicit `ldaps://` with no
+StartTLS or custom trust configuration. None of these break compatibility
+with a properly configured standard directory, but the case-sensitivity and
+TLS-configurability gaps are the ones most likely to affect a real
+deployment.
+
 ## Known limitations (deliberate, not bugs)
 
 - `groups_from_user_memberof` only expands direct group membership; AD
