@@ -2,6 +2,7 @@ package ldap
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"strings"
@@ -28,13 +29,13 @@ var (
 var dialer = net.Dialer{
 	Timeout: 9 * time.Second,
 }
-var dialOptions = ldapclient.DialWithDialer(&dialer)
 
 type ldapConnection interface {
 	Bind(username string, password string) error
 	Close() error
 	SearchWithPaging(searchRequest *ldapclient.SearchRequest, pagingSize uint32) (*ldapclient.SearchResult, error)
 	SetTimeout(timeout time.Duration)
+	StartTLS(config *tls.Config) error
 }
 
 type ldapDialer func(url string, options ...ldapclient.DialOpt) (ldapConnection, error)
@@ -169,11 +170,26 @@ func ldapSearch(connection ldapConnection, request *ldapclient.SearchRequest) ([
 }
 
 func (s *Strategy) openLDAPConnection(configuration *Configuration) (ldapConnection, error) {
-	connection, err := s.ldapDial(configuration.URL, dialOptions)
+	dialOptions := []ldapclient.DialOpt{ldapclient.DialWithDialer(&dialer)}
+	if configuration.resolvedTLSConfig != nil {
+		dialOptions = append(dialOptions, ldapclient.DialWithTLSConfig(configuration.resolvedTLSConfig))
+	}
+
+	connection, err := s.ldapDial(configuration.URL, dialOptions...)
 	if err != nil {
 		return nil, err
 	}
 	connection.SetTimeout(ldapRequestTimeout)
+
+	if configuration.resolvedTLSMode == ldapTLSModeStartTLS {
+		// A failed upgrade must fail the connection. Continuing on the plaintext
+		// connection would turn a configured StartTLS into a silent downgrade.
+		if err := connection.StartTLS(configuration.resolvedTLSConfig); err != nil {
+			s.closeLDAPConnection(connection)
+			return nil, errors.Wrap(err, "could not upgrade the LDAP connection using StartTLS")
+		}
+	}
+
 	return connection, nil
 }
 

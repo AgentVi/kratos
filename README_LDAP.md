@@ -11,6 +11,7 @@ directory entries into Kratos identities.
 selfservice/strategy/ldap/
   strategy.go     Strategy struct, dependency wiring, NodeGroup/ID
   config.go       Configuration struct, JSON decoding, validation, search-base resolution
+  tls.go          TLS mode resolution and tls.Config construction
   ldap.go         Directory access: connections, searches, filters, login + group resolution
   login.go        Login HTTP handler, identity lookup/creation, error mapping
   registration.go Registration handler stub + identity trait extraction
@@ -39,6 +40,18 @@ selfservice:
         ldap_url: ldap://127.0.0.1:1389
         bind_dn: cn=admin,dc=example,dc=org
         bind_pw: adminpassword
+
+        tls:                                        # optional, see below
+          mode: ldaps                               # ldaps | starttls | insecure_plaintext
+          server_name: directory.example.org        # defaults to the ldap_url host
+          insecure_skip_verify: false
+          min_version: "1.2"                        # 1.0 | 1.1 | 1.2 | 1.3
+          ca_cert:
+            path: /etc/ssl/certs/corp-ca.pem        # or base64: <PEM in base64>
+          client_cert:                              # optional, requires client_key
+            path: /etc/ldap/client.pem
+          client_key:
+            path: /etc/ldap/client-key.pem
 
         user_search:
           base_dn: ou=users,dc=example,dc=org      # legacy single base
@@ -96,6 +109,54 @@ the directory tree (e.g. users under both `ou=employees` and
 `ou=contractors`) instead of assuming one flat OU. Every search function
 (`ldapUserEntry`, `ldapGroupsUserMatchers`) iterates all resolved bases and
 merges results.
+
+### TLS
+
+`tls.go` owns everything about transport security. `Strategy.Config` resolves
+the block once per call into two unexported fields on `Configuration`:
+`resolvedTLSMode` and `resolvedTLSConfig` (nil when the connection is not
+encrypted). Certificates are read there rather than at dial time, so an
+unreadable file or malformed PEM surfaces as an "Invalid LDAP configuration"
+error instead of a login-time failure.
+
+**Modes.** `mode` is optional. When omitted it is derived from the `ldap_url`
+scheme — `ldaps://` → `ldaps`, anything else → `insecure_plaintext` — which
+reproduces the behaviour of configurations written before this block existed.
+Setting it explicitly is what a hardened deployment does, and a mode that
+contradicts the URL scheme is rejected at config-load time: `starttls` requires
+an `ldap://` URL (go-ldap would otherwise fail with "already encrypted") and
+`ldaps` requires an `ldaps://` URL (which would otherwise connect in
+plaintext).
+
+**StartTLS fails closed.** `openLDAPConnection` issues the StartTLS extended
+operation immediately after dialling and before any bind. If the upgrade fails
+for any reason — the server does not advertise the extension, the certificate
+does not verify — the connection is closed and the login fails. It never
+continues on the plaintext connection, because a silent downgrade is exactly
+the failure mode that makes opportunistic TLS weaker than implicit TLS.
+
+**Which mode to prefer.** `ldaps` (implicit TLS). StartTLS is the only
+IETF-standardized mechanism — RFC 2830, now RFC 4511 §4.14, OID
+`1.3.6.1.4.1.1466.20037` — and older documentation (including the still-live
+OpenLDAP FAQ) calls `ldaps://` deprecated in its favour. Current practice has
+reversed that: following RFC 8314's reasoning for mail submission, implicit TLS
+is recommended and optional StartTLS discouraged, since it depends on the
+client enforcing the upgrade. On Active Directory there is a concrete reason
+too: a connection's authentication state survives the StartTLS upgrade, so
+channel-binding validation never fires on the upgraded connection. `starttls`
+is here for directories that only expose port 389.
+
+**`ServerName` is always set** — from `server_name`, otherwise from the
+`ldap_url` host. This is required, not cosmetic: go-ldap's `Conn.StartTLS`
+passes the configuration straight to `tls.Client`, which does not infer a
+hostname the way `tls.Dial` does, so an empty `ServerName` with verification
+enabled fails outright.
+
+Other details: `min_version` defaults to TLS 1.2 and only needs lowering for
+legacy directory servers; `ca_cert` falls back to the system trust store when
+unset; `client_cert`/`client_key` must be configured together and both use the
+same form, either `path` or `base64`; `insecure_skip_verify` logs a warning
+once per process.
 
 ## Login flow (`ldap.go` + `login.go`)
 
@@ -233,7 +294,10 @@ generic across arbitrary identity schemas.
   `defaultLDAPDialer`) so tests can substitute a fake `ldapConnection`
   without a live directory.
 - `openLDAPConnection` dials with a 9s TCP dial timeout and then sets an 8s
-  read/write timeout (`ldapRequestTimeout`) on the connection.
+  read/write timeout (`ldapRequestTimeout`) on the connection. The resolved
+  `tls.Config` is passed as a dial option for `ldaps://`, and used for the
+  StartTLS upgrade in `starttls` mode; in plaintext mode no TLS dial option is
+  added at all.
 - All searches go through `ldapSearch`, which always uses
   `SearchWithPaging` with a 500-entry page size (`ldapPageSize`) so large
   result sets (e.g. a group search over a big tree) don't require the
@@ -247,12 +311,22 @@ generic across arbitrary identity schemas.
 
 ## Testing
 
+`tls_test.go` covers `tls.go` directly: mode derivation and rejection of
+mode/scheme conflicts, CA and client-certificate loading from both `path` and
+`base64`, `ServerName` derivation and override, minimum-version resolution,
+and the `Config` → `resolveTLS` chain. Certificates are generated in-process;
+`internal/testhelpers.GenerateTLSCertificateFilesForTests` cannot be reused
+here because `internal/testhelpers` imports `driver`, which imports this
+package.
+
 `ldap_test.go` exercises this package against a mock `ldapConnection`
 (`ldapConnectionMock`) rather than a real directory, covering: filter
 construction for both group-resolution modes, multi-base search and
 de-duplication, paging/partial-result handling, timeout/dial-failure wiring,
 duplicate-user and duplicate-`memberOf`-DN handling, config decoding of
-`base_dns`, and the `Config → validate → resolveLDAPSearchBases` chain.
+`base_dns`, the `Config → validate → resolveLDAPSearchBases` chain, and the
+TLS wiring (dial options per mode, StartTLS ordering relative to bind, and the
+fail-closed behaviour on a failed upgrade).
 `embedx/embedx_test.go` additionally verifies that the JSON schema itself
 rejects `base_dn` and `base_dns` being configured together for both
 `user_search` and `group_search`.
@@ -305,6 +379,10 @@ features vs. vendor-specific (mostly Active Directory) conventions.
   the search.
 - The `memberOf`-DN resolution does a plain base-object search by DN, which
   is itself standard LDAP, not an AD-only lookup mechanism.
+- **TLS** covers both transports every LDAPv3 server offers: implicit TLS on a
+  separate port and the StartTLS extended operation (RFC 4511 §4.14), with
+  configurable trust, client certificates and minimum version. Nothing here is
+  vendor-specific.
 
 ### Compatibility gaps worth knowing about
 
@@ -327,32 +405,30 @@ features vs. vendor-specific (mostly Active Directory) conventions.
      `GetEqualFoldAttributeValue`. A server or proxy that echoes attribute
      names back in a different case than requested (rare, but
      standards-legal) would silently yield empty values.
-3. **No StartTLS support.** Only implicit TLS via `ldaps://` (go-ldap's
-   default dial options, with no custom CA/client-cert/skip-verify knobs
-   exposed) or plaintext `ldap://`. RFC 4511 formally deprecated `ldaps://`
-   in favor of the StartTLS extended operation, and most internal
-   deployments with self-signed CAs need custom TLS trust configuration that
-   isn't exposed here.
-4. **Simple bind only** — no SASL/GSSAPI. Fine per spec (simple bind is a
+3. **Simple bind only** — no SASL/GSSAPI. Fine per spec (simple bind is a
    first-class standard mechanism), but the service account credential must
    always be a plaintext bind DN + password.
-5. **Alias dereferencing is hardcoded to `NeverDerefAliases`**, not
+4. **Alias dereferencing is hardcoded to `NeverDerefAliases`**, not
    configurable — one of four standard policies (RFC 4511 §4.5.1.3);
    directories that rely on alias entries to point at users/groups elsewhere
    in the tree won't be traversed.
+5. **No anonymous or unauthenticated search.** `ldapLogin` always binds with
+   `bind_dn`/`bind_pw`, and go-ldap's `Bind` rejects an empty password
+   outright, so a service account is mandatory. Plenty of OpenLDAP
+   deployments permit anonymous search and have no service account to offer.
 
 ### Bottom line
 
 For the primary (`user_matchers`) path, this is a vendor-neutral LDAPv3
 client that works against OpenLDAP, 389-ds, FreeIPA, or AD unmodified, using
-only core protocol features. The gaps are at the edges: the optional
+only core protocol features. The remaining gaps are at the edges: the optional
 `memberOf` mode assumes a non-core, directory-dependent attribute; two spots
 do case-sensitive attribute-name comparisons where the standard calls for
-case-insensitivity; and TLS is limited to implicit `ldaps://` with no
-StartTLS or custom trust configuration. None of these break compatibility
-with a properly configured standard directory, but the case-sensitivity and
-TLS-configurability gaps are the ones most likely to affect a real
-deployment.
+case-insensitivity; and there is no way to search as an anonymous or
+unauthenticated client, since go-ldap's `Bind` rejects an empty password, so a
+service account is mandatory. None of these break compatibility with a
+properly configured standard directory. Of these, the case-sensitivity one is
+the most likely to affect a real deployment.
 
 ## Known limitations (deliberate, not bugs)
 

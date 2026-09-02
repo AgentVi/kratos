@@ -3,6 +3,7 @@ package ldap
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -53,6 +54,9 @@ type Configuration struct {
 	BindDN string `json:"bind_dn"`
 	BindPW string `json:"bind_pw"`
 
+	// TLS configures how the connection to the directory server is encrypted.
+	TLS ldapTLSConfiguration `json:"tls"`
+
 	UserSearch struct {
 		// BaseDN is the legacy single search base. BaseDNs provides multiple bases
 		// with per-base scope; configuring both forms is invalid.
@@ -88,6 +92,11 @@ type Configuration struct {
 
 		RefreshTime Duration `json:"refresh_time"`
 	} `json:"update_user_identity"`
+
+	// resolvedTLSMode and resolvedTLSConfig are derived from TLS by Config.
+	// resolvedTLSConfig is nil when the connection is not TLS protected.
+	resolvedTLSMode   string
+	resolvedTLSConfig *tls.Config
 }
 
 func (s *Strategy) Config(ctx context.Context) (*Configuration, error) {
@@ -102,10 +111,25 @@ func (s *Strategy) Config(ctx context.Context) (*Configuration, error) {
 		return nil, errors.WithStack(herodot.ErrInternalServerError.WithReasonf("Invalid LDAP configuration: %s", err))
 	}
 
+	if err := configuration.resolveTLS(); err != nil {
+		return nil, errors.WithStack(herodot.ErrInternalServerError.WithReasonf("Invalid LDAP configuration: %s", err))
+	}
+
+	if configuration.TLS.InsecureSkipVerify {
+		// Config runs on every login, so this is logged once per process.
+		s.insecureTLSWarning.Do(func() {
+			s.d.Logger().Warn("LDAP TLS certificate verification is disabled because selfservice.methods.ldap.config.tls.insecure_skip_verify is set. Do not use this outside of development.")
+		})
+	}
+
 	return &configuration, nil
 }
 
 func (configuration *Configuration) validate() error {
+	if err := configuration.TLS.validate(); err != nil {
+		return errors.Wrap(err, "tls")
+	}
+
 	if _, err := resolveLDAPSearchBases(configuration.UserSearch.BaseDN, configuration.UserSearch.BaseDNs); err != nil {
 		return errors.Wrap(err, "user_search")
 	}
@@ -127,6 +151,26 @@ func (configuration *Configuration) validate() error {
 	if !configuration.GroupSearch.GroupsFromUserMemberOf && len(configuration.GroupSearch.UserMatchers) == 0 {
 		return errors.New("group_search.user_matchers must contain at least one matcher when groups_from_user_memberof is false")
 	}
+
+	return nil
+}
+
+// resolveTLS derives the effective TLS mode and configuration. The certificates
+// are loaded here rather than at dial time so that unreadable files or malformed
+// PEM content surface as a configuration error instead of a runtime failure.
+func (configuration *Configuration) resolveTLS() error {
+	mode, err := resolveLDAPTLSMode(configuration.TLS.Mode, configuration.URL)
+	if err != nil {
+		return errors.Wrap(err, "tls")
+	}
+
+	tlsConfiguration, err := buildLDAPTLSConfig(configuration, mode)
+	if err != nil {
+		return errors.Wrap(err, "tls")
+	}
+
+	configuration.resolvedTLSMode = mode
+	configuration.resolvedTLSConfig = tlsConfiguration
 
 	return nil
 }

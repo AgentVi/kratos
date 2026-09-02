@@ -2,6 +2,7 @@ package ldap
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	stderrors "errors"
 	"fmt"
@@ -24,6 +25,7 @@ type ldapConnectionMock struct {
 	closeFunc      func() error
 	searchFunc     func(searchRequest *ldapclient.SearchRequest) (*ldapclient.SearchResult, error)
 	setTimeoutFunc func(timeout time.Duration)
+	startTLSFunc   func(config *tls.Config) error
 }
 
 type ldapTestDependencies struct {
@@ -71,6 +73,14 @@ func (m *ldapConnectionMock) SetTimeout(timeout time.Duration) {
 	if m.setTimeoutFunc != nil {
 		m.setTimeoutFunc(timeout)
 	}
+}
+
+func (m *ldapConnectionMock) StartTLS(config *tls.Config) error {
+	if m.startTLSFunc == nil {
+		return nil
+	}
+
+	return m.startTLSFunc(config)
 }
 
 func newLDAPTestConfiguration() *Configuration {
@@ -677,4 +687,145 @@ func TestLDAPConfig_MultipleSearchBases_ShouldDecode(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, ldapConfig.UserSearch.BaseDNs, decodedConfiguration.UserSearch.BaseDNs)
 	assert.Equal(t, ldapConfig.GroupSearch.BaseDNs, decodedConfiguration.GroupSearch.BaseDNs)
+}
+
+func TestOpenLDAPConnection_ConfiguredTLS_ShouldDialWithTLSConfiguration(t *testing.T) {
+	for ldapURL, expectedDialOptions := range map[string]int{
+		// The dialer is always passed, the TLS configuration only when the
+		// connection is encrypted.
+		"ldap://directory.example.test":  1,
+		"ldaps://directory.example.test": 2,
+	} {
+		t.Run(ldapURL, func(t *testing.T) {
+			// Arrange
+			ldapConfig := newLDAPTestConfiguration()
+			ldapConfig.URL = ldapURL
+			require.NoError(t, ldapConfig.resolveTLS())
+			dialOptionCount := 0
+			strategy := &Strategy{ldapDial: func(url string, options ...ldapclient.DialOpt) (ldapConnection, error) {
+				assert.Equal(t, ldapURL, url)
+				dialOptionCount = len(options)
+				return &ldapConnectionMock{}, nil
+			}}
+
+			// Act
+			connection, err := strategy.openLDAPConnection(ldapConfig)
+
+			// Assert
+			require.NoError(t, err)
+			require.NotNil(t, connection)
+			assert.Equal(t, expectedDialOptions, dialOptionCount)
+		})
+	}
+}
+
+func TestOpenLDAPConnection_NonStartTLSMode_ShouldNotUpgradeConnection(t *testing.T) {
+	for _, ldapURL := range []string{"ldap://directory.example.test", "ldaps://directory.example.test"} {
+		t.Run(ldapURL, func(t *testing.T) {
+			// Arrange
+			ldapConfig := newLDAPTestConfiguration()
+			ldapConfig.URL = ldapURL
+			require.NoError(t, ldapConfig.resolveTLS())
+			startTLSCalled := false
+			connection := &ldapConnectionMock{startTLSFunc: func(config *tls.Config) error {
+				startTLSCalled = true
+				return nil
+			}}
+			strategy := &Strategy{ldapDial: func(url string, options ...ldapclient.DialOpt) (ldapConnection, error) {
+				return connection, nil
+			}}
+
+			// Act
+			_, err := strategy.openLDAPConnection(ldapConfig)
+
+			// Assert
+			require.NoError(t, err)
+			assert.False(t, startTLSCalled)
+		})
+	}
+}
+
+func TestLDAPLogin_StartTLSMode_ShouldUpgradeEveryConnectionBeforeBinding(t *testing.T) {
+	// Arrange
+	ldapConfig := newLDAPTestConfiguration()
+	ldapConfig.TLS.Mode = ldapTLSModeStartTLS
+	user := newLDAPTestUser()
+	group := &ldapclient.Entry{DN: "CN=Administrators,OU=Groups,DC=example,DC=com"}
+	var serviceOperations, passwordVerificationOperations []string
+	serviceConnection := &ldapConnectionMock{
+		startTLSFunc: func(config *tls.Config) error {
+			assert.NotNil(t, config, "StartTLS must receive the resolved TLS configuration")
+			serviceOperations = append(serviceOperations, "starttls")
+			return nil
+		},
+		bindFunc: func(username string, password string) error {
+			serviceOperations = append(serviceOperations, "bind")
+			return nil
+		},
+		searchFunc: func(searchRequest *ldapclient.SearchRequest) (*ldapclient.SearchResult, error) {
+			serviceOperations = append(serviceOperations, "search")
+			if searchRequest.BaseDN == ldapConfig.UserSearch.BaseDN {
+				return &ldapclient.SearchResult{Entries: []*ldapclient.Entry{&user}}, nil
+			}
+			return &ldapclient.SearchResult{Entries: []*ldapclient.Entry{group}}, nil
+		},
+	}
+	passwordVerificationConnection := &ldapConnectionMock{
+		startTLSFunc: func(config *tls.Config) error {
+			passwordVerificationOperations = append(passwordVerificationOperations, "starttls")
+			return nil
+		},
+		bindFunc: func(username string, password string) error {
+			assert.Equal(t, user.DN, username)
+			passwordVerificationOperations = append(passwordVerificationOperations, "bind")
+			return nil
+		},
+	}
+	ctx, strategy := newLDAPTestStrategy(t, ldapConfig, serviceConnection, passwordVerificationConnection)
+
+	// Act
+	resolvedUser, groups, err := strategy.ldapLogin(ctx, "alice", "password")
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, user.DN, resolvedUser.DN)
+	require.Len(t, groups, 1)
+	assert.Equal(t, []string{"starttls", "bind", "search", "search"}, serviceOperations)
+	assert.Equal(t, []string{"starttls", "bind"}, passwordVerificationOperations)
+}
+
+func TestLDAPLogin_StartTLSFailure_ShouldFailClosedWithoutBinding(t *testing.T) {
+	// Arrange
+	ldapConfig := newLDAPTestConfiguration()
+	ldapConfig.TLS.Mode = ldapTLSModeStartTLS
+	startTLSFailure := stderrors.New("server does not support StartTLS")
+	connectionClosed := false
+	bound := false
+	connection := &ldapConnectionMock{
+		startTLSFunc: func(config *tls.Config) error {
+			return startTLSFailure
+		},
+		bindFunc: func(username string, password string) error {
+			bound = true
+			return nil
+		},
+		closeFunc: func() error {
+			connectionClosed = true
+			return nil
+		},
+	}
+	ctx, strategy := newLDAPTestStrategy(t, ldapConfig, connection)
+
+	// Act
+	_, _, err := strategy.ldapLogin(ctx, "alice", "password")
+
+	// Assert
+	require.Error(t, err)
+	assert.ErrorIs(t, err, startTLSFailure)
+	assert.True(t, isLDAPOperationalError(err))
+	assert.False(t, bound, "the connection must not be used after a failed StartTLS upgrade")
+	assert.True(t, connectionClosed)
+	expected := pkgerrors.Cause(schema.NewLDAPStatusServiceUnavailable()).(*schema.ValidationError)
+	actual := pkgerrors.Cause(ldapLoginError(err)).(*schema.ValidationError)
+	assert.Equal(t, expected.Messages[0].Text, actual.Messages[0].Text)
 }

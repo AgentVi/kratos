@@ -3,6 +3,7 @@ package ldap
 import (
 	"context"
 	"net/http"
+	"sync"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/gofrs/uuid"
@@ -57,6 +58,10 @@ type Strategy struct {
 	ldapDial  ldapDialer
 	validator *validator.Validate
 	dec       *decoderx.HTTP
+
+	// insecureTLSWarning keeps the warning about disabled certificate
+	// verification to one log line per process instead of one per login.
+	insecureTLSWarning sync.Once
 }
 
 func NewStrategy(d dependencies) *Strategy {
