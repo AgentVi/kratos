@@ -414,9 +414,8 @@ func NewErrorValidationTraitsMismatch() *Message {
 
 func NewErrorValidationLdapServiceUnavailable() *Message {
 	return &Message{
-		ID:      ErrorLdapServiceUnavailable,
-		Text:    "Unable to connect to the domain server, please contact your IT admin for assistance",
-		Type:    Error,
-		Context: context(nil),
+		ID:   ErrorLdapServiceUnavailable,
+		Text: "Unable to connect to the domain server, please contact your IT admin for assistance",
+		Type: Error,
 	}
 }
