@@ -1,4 +1,4 @@
-// Copyright © 2024 Irisity AB
+// Copyright © 2024-2026 Irisity AB
 // SPDX-License-Identifier: Apache-2.0
 
 package ldap
@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	ldapclient "github.com/go-ldap/ldap/v3"
 	"github.com/gofrs/uuid"
 	"github.com/ory/herodot"
 	"github.com/ory/kratos/identity"
@@ -37,6 +38,22 @@ func (s *Strategy) handleLoginError(w http.ResponseWriter, r *http.Request, f *l
 	return err
 }
 
+func ldapLoginError(err error) error {
+	// Directory and search failures are actionable for an administrator, while
+	// user-not-found and invalid-password responses intentionally stay generic.
+	if isLDAPOperationalError(err) {
+		return errors.WithStack(schema.NewLDAPStatusServiceUnavailable())
+	}
+
+	if errors.Is(err, errLDAPUserNotFound) ||
+		errors.Is(err, errLDAPMultipleUsersFound) ||
+		ldapclient.IsErrorWithCode(err, ldapclient.LDAPResultInvalidCredentials) {
+		return errors.WithStack(schema.NewInvalidCredentialsError())
+	}
+
+	return err
+}
+
 func (s *Strategy) Login(w http.ResponseWriter, r *http.Request, f *login.Flow, _ *session.Session) (i *identity.Identity, err error) {
 	if err := login.CheckAAL(f, identity.AuthenticatorAssuranceLevel1); err != nil {
 		return nil, err
@@ -61,7 +78,7 @@ func (s *Strategy) Login(w http.ResponseWriter, r *http.Request, f *login.Flow, 
 	user, groups, err := s.ldapLogin(r.Context(), p.Identifier, p.Password)
 	if err != nil {
 		s.d.Logger().WithError(err).Error()
-		return nil, s.handleLoginError(w, r, f, &p, errors.WithStack(schema.NewInvalidCredentialsError()))
+		return nil, s.handleLoginError(w, r, f, &p, ldapLoginError(err))
 	}
 
 	conf, err := s.Config(r.Context())
@@ -73,7 +90,11 @@ func (s *Strategy) Login(w http.ResponseWriter, r *http.Request, f *login.Flow, 
 	userId := user.GetAttributeValue(conf.UserSearch.Username)
 
 	i, _, err = s.d.PrivilegedIdentityPool().FindByCredentialsIdentifier(r.Context(), s.ID(), userId)
-	if err != nil && errors.Is(err, sqlcon.ErrNoRows) {
+	if err != nil && !errors.Is(err, sqlcon.ErrNoRows) {
+		return nil, err
+	}
+
+	if errors.Is(err, sqlcon.ErrNoRows) {
 		// Create new identity in memory, to be able to add the identify if the authorization succeed after login webhook
 		// INFORMATION about the flow
 		// This require webhook and the receiver handle the creation of the identity and send it back as a response

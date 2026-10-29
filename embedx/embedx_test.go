@@ -1,4 +1,5 @@
 // Copyright © 2023 Ory Corp
+// Modifications Copyright © 2026 Irisity AB
 // SPDX-License-Identifier: Apache-2.0
 
 package embedx
@@ -10,9 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/ory/jsonschema/v3"
 )
@@ -69,6 +69,134 @@ func TestAddSchemaResources(t *testing.T) {
 					assert.NoError(t, err)
 				}
 			}
+		})
+	}
+}
+
+func TestConfigSchema_LDAPSearchBaseConfiguration_ShouldRejectLegacyAndMultiBaseTogether(t *testing.T) {
+	for _, searchConfiguration := range []string{"user_search", "group_search"} {
+		t.Run(searchConfiguration, func(t *testing.T) {
+			// Arrange
+			compiler := jsonschema.NewCompiler()
+			require.NoError(t, AddSchemaResources(compiler, Config))
+			configSchema, err := compiler.Compile(context.Background(), Config.GetSchemaID())
+			require.NoError(t, err)
+			searchSettings := map[string]interface{}{
+				"base_dns": []interface{}{
+					map[string]interface{}{"base_dn": "ou=users,dc=example,dc=com"},
+				},
+			}
+			configuration := map[string]interface{}{
+				"dsn": "memory",
+				"identity": map[string]interface{}{
+					"schemas": []interface{}{
+						map[string]interface{}{
+							"id":  "default",
+							"url": "file:///tmp/identity.schema.json",
+						},
+					},
+				},
+				"selfservice": map[string]interface{}{
+					"default_browser_return_url": "https://example.com/",
+					"methods": map[string]interface{}{
+						"ldap": map[string]interface{}{
+							"config": map[string]interface{}{
+								searchConfiguration: searchSettings,
+							},
+						},
+					},
+				},
+			}
+			require.NoError(t, configSchema.ValidateInterface(configuration))
+			searchSettings["base_dn"] = "ou=legacy,dc=example,dc=com"
+
+			// Act
+			err = configSchema.ValidateInterface(configuration)
+
+			// Assert
+			require.Error(t, err)
+		})
+	}
+}
+
+// newLDAPConfigurationForSchemaTest returns a minimal valid Kratos configuration
+// with the given LDAP method configuration applied.
+func newLDAPConfigurationForSchemaTest(ldapConfiguration map[string]interface{}) map[string]interface{} {
+	return map[string]interface{}{
+		"dsn": "memory",
+		"identity": map[string]interface{}{
+			"schemas": []interface{}{
+				map[string]interface{}{
+					"id":  "default",
+					"url": "file:///tmp/identity.schema.json",
+				},
+			},
+		},
+		"selfservice": map[string]interface{}{
+			"default_browser_return_url": "https://example.com/",
+			"methods": map[string]interface{}{
+				"ldap": map[string]interface{}{
+					"config": ldapConfiguration,
+				},
+			},
+		},
+	}
+}
+
+func newConfigSchemaForTest(t *testing.T) *jsonschema.Schema {
+	t.Helper()
+
+	compiler := jsonschema.NewCompiler()
+	require.NoError(t, AddSchemaResources(compiler, Config))
+	configSchema, err := compiler.Compile(context.Background(), Config.GetSchemaID())
+	require.NoError(t, err)
+
+	return configSchema
+}
+
+func TestConfigSchema_LDAPTLSConfiguration_ShouldAcceptEveryOption(t *testing.T) {
+	// Arrange
+	configSchema := newConfigSchemaForTest(t)
+	configuration := newLDAPConfigurationForSchemaTest(map[string]interface{}{
+		"ldap_url": "ldaps://directory.example.com:636",
+		"tls": map[string]interface{}{
+			"mode":                 "ldaps",
+			"server_name":          "directory.example.com",
+			"insecure_skip_verify": false,
+			"min_version":          "1.2",
+			"ca_cert":              map[string]interface{}{"path": "/etc/ssl/certs/corp-ca.pem"},
+			"client_cert":          map[string]interface{}{"path": "/etc/ldap/client.pem"},
+			"client_key":           map[string]interface{}{"base64": "LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0t"},
+		},
+	})
+
+	// Act
+	err := configSchema.ValidateInterface(configuration)
+
+	// Assert
+	require.NoError(t, err)
+}
+
+func TestConfigSchema_LDAPTLSConfiguration_ShouldRejectUnsupportedValues(t *testing.T) {
+	for description, tlsConfiguration := range map[string]map[string]interface{}{
+		"unsupported mode":        {"mode": "tls"},
+		"unsupported min_version": {"min_version": "1.4"},
+		"unknown tls property":    {"skip_verify": true},
+		"unknown source property": {"ca_cert": map[string]interface{}{"file": "/etc/ssl/certs/corp-ca.pem"}},
+		"non boolean skip verify": {"insecure_skip_verify": "yes"},
+	} {
+		t.Run("case="+description, func(t *testing.T) {
+			// Arrange
+			configSchema := newConfigSchemaForTest(t)
+			configuration := newLDAPConfigurationForSchemaTest(map[string]interface{}{
+				"tls": tlsConfiguration,
+			})
+
+			// Act
+			err := configSchema.ValidateInterface(configuration)
+
+			// Assert
+			require.Error(t, err)
 		})
 	}
 }

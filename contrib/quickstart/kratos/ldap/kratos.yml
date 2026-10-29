@@ -55,7 +55,35 @@ selfservice:
         ldap_url: ldap://127.0.0.1:1389
         bind_dn: cn=admin,dc=example,dc=org
         bind_pw: adminpassword
+        # Without a tls block the mode is derived from the ldap_url scheme, so
+        # this quickstart talks plaintext to the local directory.
+        #
+        # Recommended for real deployments -- implicit TLS with a private CA:
+        #   ldap_url: ldaps://127.0.0.1:1636
+        #   tls:
+        #     mode: ldaps
+        #     ca_cert:
+        #       path: /etc/ssl/certs/openldap-ca.pem
+        #
+        # For directories that only expose port 389. A failed upgrade fails the
+        # login, it never falls back to plaintext:
+        #   ldap_url: ldap://127.0.0.1:1389
+        #   tls:
+        #     mode: starttls
+        #     ca_cert:
+        #       path: /etc/ssl/certs/openldap-ca.pem
+        #
+        # Also available: server_name (defaults to the ldap_url host),
+        # min_version (defaults to 1.2), client_cert and client_key for TLS
+        # client authentication, and insecure_skip_verify for development only.
         user_search:
+          # Use base_dns instead when users span multiple branches. Each entry
+          # accepts scope: base_object, single_level, or whole_subtree.
+          # base_dns:
+          #   - base_dn: ou=employees,dc=example,dc=org
+          #     scope: whole_subtree
+          #   - base_dn: ou=contractors,dc=example,dc=org
+          #     scope: single_level
           base_dn: ou=users,dc=example,dc=org
           filter: (objectClass=inetOrgPerson)
           username: uid
@@ -69,9 +97,15 @@ selfservice:
             - name: email
               attr: mail
         group_search:
+          # base_dns is also supported here for groups in multiple branches.
+          # base_dns:
+          #   - base_dn: ou=security-groups,dc=example,dc=org
+          #     scope: whole_subtree
           base_dn: ou=groups,dc=example,dc=org
           filter: (objectClass=organizationalUnit)
           name_attr: cn
+          # memberOf resolves direct groups only; nested and primary AD groups
+          # are intentionally left for follow-up work.
           groups_from_user_memberof: false
           user_matchers:
             - user_attr: uid
