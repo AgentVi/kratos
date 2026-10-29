@@ -60,8 +60,11 @@
     "messages": [
       {
         "id": 4000001,
-        "text": "The active recovery strategy code is not enabled. Please enable it in the configuration.",
-        "type": "error"
+        "text": "You attempted recovery using code, which is not enabled or does not exist. An administrator needs to enable this recovery method.",
+        "type": "error",
+        "context": {
+          "reason": "You attempted recovery using code, which is not enabled or does not exist. An administrator needs to enable this recovery method."
+        }
       }
     ]
   },

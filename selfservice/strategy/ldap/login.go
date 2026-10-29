@@ -1,20 +1,22 @@
 package ldap
 
 import (
+	"net/http"
+	"time"
+
 	"github.com/gofrs/uuid"
 	"github.com/ory/herodot"
 	"github.com/ory/kratos/identity"
 	"github.com/ory/kratos/schema"
 	"github.com/ory/kratos/selfservice/flow"
 	"github.com/ory/kratos/selfservice/flow/login"
+	"github.com/ory/kratos/session"
 	"github.com/ory/kratos/text"
 	"github.com/ory/kratos/ui/node"
 	"github.com/ory/kratos/x"
 	"github.com/ory/x/decoderx"
 	"github.com/ory/x/sqlcon"
 	"github.com/pkg/errors"
-	"net/http"
-	"time"
 )
 
 func (s *Strategy) RegisterLoginRoutes(r *x.RouterPublic) {
@@ -32,12 +34,12 @@ func (s *Strategy) handleLoginError(w http.ResponseWriter, r *http.Request, f *l
 	return err
 }
 
-func (s *Strategy) Login(w http.ResponseWriter, r *http.Request, f *login.Flow, identityID uuid.UUID) (i *identity.Identity, err error) {
+func (s *Strategy) Login(w http.ResponseWriter, r *http.Request, f *login.Flow, _ *session.Session) (i *identity.Identity, err error) {
 	if err := login.CheckAAL(f, identity.AuthenticatorAssuranceLevel1); err != nil {
 		return nil, err
 	}
 
-	if err := flow.MethodEnabledAndAllowedFromRequest(r, s.ID().String(), s.d); err != nil {
+	if err := flow.MethodEnabledAndAllowedFromRequest(r, f.GetFlowName(), s.ID().String(), s.d); err != nil {
 		return nil, err
 	}
 
