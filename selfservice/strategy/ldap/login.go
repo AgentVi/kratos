@@ -1,4 +1,4 @@
-// Copyright © 2024 Irisity AB
+// Copyright © 2024-2026 Irisity AB
 // SPDX-License-Identifier: Apache-2.0
 
 package ldap
