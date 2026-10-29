@@ -10,72 +10,60 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 
-	"github.com/ory/x/contextx"
-	"github.com/ory/x/jsonnetsecure"
-
-	"github.com/ory/x/popx"
-
-	"github.com/hashicorp/go-retryablehttp"
-
-	"github.com/ory/x/httpx"
-	"github.com/ory/x/otelx"
-	otelsql "github.com/ory/x/otelx/sql"
-
+	"github.com/cenkalti/backoff"
+	"github.com/dgraph-io/ristretto"
 	"github.com/gobuffalo/pop/v6"
-
-	"github.com/ory/nosurf"
-
-	"github.com/ory/kratos/hydra"
-	"github.com/ory/kratos/selfservice/strategy/code"
-	"github.com/ory/kratos/selfservice/strategy/webauthn"
-
-	"github.com/ory/kratos/selfservice/strategy/lookup"
-
-	"github.com/ory/kratos/selfservice/strategy/totp"
-
+	"github.com/gorilla/sessions"
+	"github.com/hashicorp/go-retryablehttp"
 	"github.com/luna-duclos/instrumentedsql"
+	"github.com/pkg/errors"
+	"go.opentelemetry.io/otel/trace/noop"
 
-	prometheus "github.com/ory/x/prometheusx"
-
+	"github.com/ory/herodot"
 	"github.com/ory/kratos/cipher"
 	"github.com/ory/kratos/continuity"
+	"github.com/ory/kratos/courier"
+	"github.com/ory/kratos/driver/config"
 	"github.com/ory/kratos/hash"
+	"github.com/ory/kratos/hydra"
+	"github.com/ory/kratos/identity"
+	"github.com/ory/kratos/persistence"
+	"github.com/ory/kratos/persistence/sql"
 	"github.com/ory/kratos/schema"
+	"github.com/ory/kratos/selfservice/errorx"
+	"github.com/ory/kratos/selfservice/flow/login"
+	"github.com/ory/kratos/selfservice/flow/logout"
 	"github.com/ory/kratos/selfservice/flow/recovery"
+	"github.com/ory/kratos/selfservice/flow/registration"
 	"github.com/ory/kratos/selfservice/flow/settings"
 	"github.com/ory/kratos/selfservice/flow/verification"
 	"github.com/ory/kratos/selfservice/hook"
+	"github.com/ory/kratos/selfservice/strategy/code"
 	"github.com/ory/kratos/selfservice/strategy/link"
+	"github.com/ory/kratos/selfservice/strategy/lookup"
+	"github.com/ory/kratos/selfservice/strategy/oidc"
+	"github.com/ory/kratos/selfservice/strategy/password"
 	"github.com/ory/kratos/selfservice/strategy/profile"
+	"github.com/ory/kratos/selfservice/strategy/totp"
+	"github.com/ory/kratos/selfservice/strategy/webauthn"
+	"github.com/ory/kratos/session"
 	"github.com/ory/kratos/x"
-
-	"github.com/cenkalti/backoff"
-	"github.com/gorilla/sessions"
-	"github.com/pkg/errors"
-
+	"github.com/ory/nosurf"
+	"github.com/ory/x/contextx"
 	"github.com/ory/x/dbal"
 	"github.com/ory/x/healthx"
-	"github.com/ory/x/sqlcon"
-
+	"github.com/ory/x/httpx"
+	"github.com/ory/x/jsonnetsecure"
+	"github.com/ory/x/jwksx"
 	"github.com/ory/x/logrusx"
-
-	"github.com/ory/kratos/courier"
-	"github.com/ory/kratos/persistence"
-	"github.com/ory/kratos/persistence/sql"
-	"github.com/ory/kratos/selfservice/flow/login"
-	"github.com/ory/kratos/selfservice/flow/logout"
-	"github.com/ory/kratos/selfservice/flow/registration"
-	"github.com/ory/kratos/selfservice/strategy/oidc"
-
-	"github.com/ory/herodot"
-
-	"github.com/ory/kratos/driver/config"
-	"github.com/ory/kratos/identity"
-	"github.com/ory/kratos/selfservice/errorx"
-	password2 "github.com/ory/kratos/selfservice/strategy/password"
-	"github.com/ory/kratos/session"
+	"github.com/ory/x/otelx"
+	otelsql "github.com/ory/x/otelx/sql"
+	"github.com/ory/x/popx"
+	prometheus "github.com/ory/x/prometheusx"
+	"github.com/ory/x/sqlcon"
 )
 
 type RegistryDefault struct {
@@ -97,11 +85,12 @@ type RegistryDefault struct {
 	persister       persistence.Persister
 	migrationStatus popx.MigrationStatuses
 
-	hookVerifier           *hook.Verifier
-	hookSessionIssuer      *hook.SessionIssuer
-	hookSessionDestroyer   *hook.SessionDestroyer
-	hookAddressVerifier    *hook.AddressVerifier
-	hookShowVerificationUI *hook.ShowVerificationUIHook
+	hookVerifier            *hook.Verifier
+	hookSessionIssuer       *hook.SessionIssuer
+	hookSessionDestroyer    *hook.SessionDestroyer
+	hookAddressVerifier     *hook.AddressVerifier
+	hookShowVerificationUI  *hook.ShowVerificationUIHook
+	hookCodeAddressVerifier *hook.CodeAddressVerifier
 
 	identityHandler   *identity.Handler
 	identityValidator *identity.Validator
@@ -113,11 +102,12 @@ type RegistryDefault struct {
 
 	schemaHandler *schema.Handler
 
-	sessionHandler *session.Handler
-	sessionManager session.Manager
+	sessionHandler   *session.Handler
+	sessionManager   session.Manager
+	sessionTokenizer *session.Tokenizer
 
 	passwordHasher    hash.Hasher
-	passwordValidator password2.Validator
+	passwordValidator password.Validator
 
 	crypter cipher.Cipher
 
@@ -151,7 +141,8 @@ type RegistryDefault struct {
 
 	selfserviceLogoutHandler *logout.Handler
 
-	selfserviceStrategies []interface{}
+	selfserviceStrategies            []any
+	replacementSelfserviceStrategies []NewStrategy
 
 	hydra hydra.Hydra
 
@@ -162,11 +153,13 @@ type RegistryDefault struct {
 	csrfTokenGenerator x.CSRFToken
 
 	jsonnetVMProvider jsonnetsecure.VMProvider
+	jsonnetPool       jsonnetsecure.Pool
+	jwkFetcher        *jwksx.FetcherNext
 }
 
 func (m *RegistryDefault) JsonnetVM(ctx context.Context) (jsonnetsecure.VM, error) {
 	if m.jsonnetVMProvider == nil {
-		m.jsonnetVMProvider = &jsonnetsecure.DefaultProvider{Subcommand: "jsonnet"}
+		m.jsonnetVMProvider = &jsonnetsecure.DefaultProvider{Subcommand: "jsonnet", Pool: m.jsonnetPool}
 	}
 	return m.jsonnetVMProvider.JsonnetVM(ctx)
 }
@@ -310,28 +303,50 @@ func (m *RegistryDefault) CourierConfig() config.CourierConfigs {
 	return m.Config()
 }
 
-func (m *RegistryDefault) selfServiceStrategies() []interface{} {
+func (m *RegistryDefault) selfServiceStrategies() []any {
 	if len(m.selfserviceStrategies) == 0 {
-		m.selfserviceStrategies = []interface{}{
-			password2.NewStrategy(m),
-			oidc.NewStrategy(m),
-			profile.NewStrategy(m),
-			code.NewStrategy(m),
-			link.NewStrategy(m),
-			totp.NewStrategy(m),
-			webauthn.NewStrategy(m),
-			lookup.NewStrategy(m),
-			ldap.NewStrategy(m),
+		if m.replacementSelfserviceStrategies != nil {
+			// Construct self-service strategies from the replacements
+			for _, newStrategy := range m.replacementSelfserviceStrategies {
+				m.selfserviceStrategies = append(m.selfserviceStrategies, newStrategy(m))
+			}
+		} else {
+			// Construct the default list of strategies
+			m.selfserviceStrategies = []any{
+				password.NewStrategy(m),
+				oidc.NewStrategy(m),
+				profile.NewStrategy(m),
+				code.NewStrategy(m),
+				link.NewStrategy(m),
+				totp.NewStrategy(m),
+				webauthn.NewStrategy(m),
+				lookup.NewStrategy(m),
+				ldap.NewStrategy(m),
+			}
 		}
 	}
 
 	return m.selfserviceStrategies
 }
 
-func (m *RegistryDefault) RegistrationStrategies(ctx context.Context) (registrationStrategies registration.Strategies) {
+func (m *RegistryDefault) strategyRegistrationEnabled(ctx context.Context, id string) bool {
+	return m.Config().SelfServiceStrategy(ctx, id).Enabled
+}
+
+func (m *RegistryDefault) strategyLoginEnabled(ctx context.Context, id string) bool {
+	return m.Config().SelfServiceStrategy(ctx, id).Enabled
+}
+
+func (m *RegistryDefault) RegistrationStrategies(ctx context.Context, filters ...registration.StrategyFilter) (registrationStrategies registration.Strategies) {
+nextStrategy:
 	for _, strategy := range m.selfServiceStrategies() {
 		if s, ok := strategy.(registration.Strategy); ok {
-			if m.Config().SelfServiceStrategy(ctx, string(s.ID())).Enabled {
+			for _, filter := range filters {
+				if !filter(s) {
+					continue nextStrategy
+				}
+			}
+			if m.strategyRegistrationEnabled(ctx, s.ID().String()) {
 				registrationStrategies = append(registrationStrategies, s)
 			}
 		}
@@ -350,10 +365,16 @@ func (m *RegistryDefault) AllRegistrationStrategies() registration.Strategies {
 	return registrationStrategies
 }
 
-func (m *RegistryDefault) LoginStrategies(ctx context.Context) (loginStrategies login.Strategies) {
+func (m *RegistryDefault) LoginStrategies(ctx context.Context, filters ...login.StrategyFilter) (loginStrategies login.Strategies) {
+nextStrategy:
 	for _, strategy := range m.selfServiceStrategies() {
 		if s, ok := strategy.(login.Strategy); ok {
-			if m.Config().SelfServiceStrategy(ctx, string(s.ID())).Enabled {
+			for _, filter := range filters {
+				if !filter(s) {
+					continue nextStrategy
+				}
+			}
+			if m.strategyLoginEnabled(ctx, s.ID().String()) {
 				loginStrategies = append(loginStrategies, s)
 			}
 		}
@@ -389,6 +410,16 @@ func (m *RegistryDefault) IdentityValidator() *identity.Validator {
 
 func (m *RegistryDefault) WithConfig(c *config.Config) Registry {
 	m.c = c
+	return m
+}
+
+// WithSelfserviceStrategies is only available in testing and overrides the
+// selfservice strategies with the given ones.
+func (m *RegistryDefault) WithSelfserviceStrategies(t testing.TB, strategies []any) Registry {
+	if t == nil {
+		panic("Passing selfservice strategies is only supported in testing")
+	}
+	m.selfserviceStrategies = strategies
 	return m
 }
 
@@ -461,10 +492,10 @@ func (m *RegistryDefault) Hasher(ctx context.Context) hash.Hasher {
 	return m.passwordHasher
 }
 
-func (m *RegistryDefault) PasswordValidator() password2.Validator {
+func (m *RegistryDefault) PasswordValidator() password.Validator {
 	if m.passwordValidator == nil {
 		var err error
-		m.passwordValidator, err = password2.NewDefaultPasswordValidatorStrategy(m)
+		m.passwordValidator, err = password.NewDefaultPasswordValidatorStrategy(m)
 		if err != nil {
 			m.Logger().WithError(err).Fatal("could not initialize DefaultPasswordValidator")
 		}
@@ -576,6 +607,8 @@ func (m *RegistryDefault) Init(ctx context.Context, ctxer contextx.Contextualize
 
 	o := newOptions(opts)
 
+	m.jsonnetPool = o.jsonnetPool
+
 	var instrumentedDriverOpts []instrumentedsql.Opt
 	if m.Tracer(ctx).IsLoaded() {
 		instrumentedDriverOpts = []instrumentedsql.Opt{
@@ -586,6 +619,14 @@ func (m *RegistryDefault) Init(ctx context.Context, ctxer contextx.Contextualize
 	}
 	if o.replaceTracer != nil {
 		m.trc = o.replaceTracer(m.trc)
+	}
+
+	if o.replacementStrategies != nil {
+		m.replacementSelfserviceStrategies = o.replacementStrategies
+	}
+
+	if o.extraHooks != nil {
+		m.WithHooks(o.extraHooks)
 	}
 
 	bc := backoff.NewExponentialBackOff()
@@ -617,7 +658,7 @@ func (m *RegistryDefault) Init(ctx context.Context, ctxer contextx.Contextualize
 			m.Logger().WithError(err).Warnf("Unable to open database, retrying.")
 			return errors.WithStack(err)
 		}
-		p, err := sql.NewPersister(ctx, m, c)
+		p, err := sql.NewPersister(ctx, m, c, sql.WithExtraMigrations(o.extraMigrations...), sql.WithDisabledLogging(o.disableMigrationLogging))
 		if err != nil {
 			m.Logger().WithError(err).Warnf("Unable to initialize persister, retrying.")
 			return err
@@ -651,7 +692,6 @@ func (m *RegistryDefault) Init(ctx context.Context, ctxer contextx.Contextualize
 		m.persister = p.WithNetworkID(net.ID)
 		return nil
 	}, bc)
-
 	if err != nil {
 		return err
 	}
@@ -735,6 +775,14 @@ func (m *RegistryDefault) VerificationCodePersister() code.VerificationCodePersi
 	return m.Persister()
 }
 
+func (m *RegistryDefault) RegistrationCodePersister() code.RegistrationCodePersister {
+	return m.Persister()
+}
+
+func (m *RegistryDefault) LoginCodePersister() code.LoginCodePersister {
+	return m.Persister()
+}
+
 func (m *RegistryDefault) Persister() persistence.Persister {
 	return m.persister
 }
@@ -770,16 +818,13 @@ func (m *RegistryDefault) PrometheusManager() *prometheus.MetricsManager {
 	return m.pmm
 }
 
-func (m *RegistryDefault) HTTPClient(ctx context.Context, opts ...httpx.ResilientOptions) *retryablehttp.Client {
+func (m *RegistryDefault) HTTPClient(_ context.Context, opts ...httpx.ResilientOptions) *retryablehttp.Client {
 	opts = append(opts,
 		httpx.ResilientClientWithLogger(m.Logger()),
 		httpx.ResilientClientWithMaxRetry(2),
-		httpx.ResilientClientWithConnectionTimeout(30*time.Second))
-
-	tracer := m.Tracer(ctx)
-	if tracer.IsLoaded() {
-		opts = append(opts, httpx.ResilientClientWithTracer(tracer.Tracer()))
-	}
+		httpx.ResilientClientWithConnectionTimeout(30*time.Second),
+		httpx.ResilientClientWithTracer(noop.NewTracerProvider().Tracer("Ory Kratos")), // will use the tracer from a context if available
+	)
 
 	// One of the few exceptions, this usually should not be hot reloaded.
 	if m.Config().ClientHTTPNoPrivateIPRanges(contextx.RootContext) {
@@ -803,4 +848,30 @@ func (m *RegistryDefault) Contextualizer() contextx.Contextualizer {
 		panic("registry Contextualizer not set")
 	}
 	return m.ctxer
+}
+
+func (m *RegistryDefault) JWKSFetcher() *jwksx.FetcherNext {
+	if m.jwkFetcher == nil {
+		maxItems := int64(10000000)
+		cache, _ := ristretto.NewCache(&ristretto.Config{
+			NumCounters:        maxItems * 10,
+			MaxCost:            maxItems,
+			BufferItems:        64,
+			Metrics:            true,
+			IgnoreInternalCost: true,
+			Cost: func(value interface{}) int64 {
+				return 1
+			},
+		})
+
+		m.jwkFetcher = jwksx.NewFetcherNext(cache)
+	}
+	return m.jwkFetcher
+}
+
+func (m *RegistryDefault) SessionTokenizer() *session.Tokenizer {
+	if m.sessionTokenizer == nil {
+		m.sessionTokenizer = session.NewTokenizer(m)
+	}
+	return m.sessionTokenizer
 }
