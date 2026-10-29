@@ -327,10 +327,13 @@ require (
 
 require (
 	github.com/coreos/go-oidc/v3 v3.9.0
+	github.com/go-ldap/ldap/v3 v3.4.6
 	github.com/lestrrat-go/jwx/v2 v2.0.19
 )
 
 require (
+	github.com/Azure/go-ntlmssp v0.0.0-20221128193559-754e69321358 // indirect
+	github.com/go-asn1-ber/asn1-ber v1.5.5 // indirect
 	github.com/jackc/puddle/v2 v2.1.2 // indirect
 	github.com/lestrrat-go/httprc v1.0.4 // indirect
 	github.com/segmentio/asm v1.2.0 // indirect

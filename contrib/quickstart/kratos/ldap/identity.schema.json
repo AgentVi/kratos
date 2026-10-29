@@ -1,0 +1,58 @@
+{
+  "$id":
+  "https://schemas.ory.sh/presets/kratos/quickstart/ldap/identity.schema.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Person",
+  "type": "object",
+  "properties": {
+    "traits": {
+      "type": "object",
+      "properties": {
+        "loginId": {
+          "type": "string",
+          "title": "Login Id",
+          "minLength": 3,
+          "ory.sh/kratos": {
+            "credentials": {
+              "ldap": {
+                "identifier": true
+              }
+            }
+          }
+        },
+        "metadata": {
+          "type": "object",
+          "properties": {
+            "displayName": {
+              "title": "Display name",
+              "type": "string"
+            },
+            "dn": {
+              "title": "DN",
+              "type": "string"
+            }
+          }
+        },
+        "groups": {
+          "title": "Groups",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "dn": {
+                "title": "DN",
+                "type": "string"
+              },
+              "id": {
+                "title": "Id ex. sAMAccountName",
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "required": ["loginId"],
+      "additionalProperties": false
+    }
+  }
+}

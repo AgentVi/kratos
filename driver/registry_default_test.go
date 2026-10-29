@@ -1,4 +1,5 @@
 // Copyright © 2023 Ory Corp
+// Modifications Copyright © 2026 Irisity AB
 // SPDX-License-Identifier: Apache-2.0
 
 package driver_test
@@ -880,7 +881,7 @@ func TestDefaultRegistry_AllStrategies(t *testing.T) {
 	_, reg := internal.NewVeryFastRegistryWithoutDB(t)
 
 	t.Run("case=all login strategies", func(t *testing.T) {
-		expects := []string{"password", "oidc", "code", "totp", "webauthn", "lookup_secret"}
+		expects := []string{"password", "oidc", "code", "totp", "webauthn", "lookup_secret", "ldap"}
 		s := reg.AllLoginStrategies()
 		require.Len(t, s, len(expects))
 		for k, e := range expects {
@@ -889,7 +890,7 @@ func TestDefaultRegistry_AllStrategies(t *testing.T) {
 	})
 
 	t.Run("case=all registration strategies", func(t *testing.T) {
-		expects := []string{"password", "oidc", "code", "webauthn"}
+		expects := []string{"password", "oidc", "code", "webauthn", "ldap"}
 		s := reg.AllRegistrationStrategies()
 		require.Len(t, s, len(expects))
 		for k, e := range expects {

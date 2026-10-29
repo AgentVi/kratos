@@ -51,6 +51,15 @@
                       "enum": ["email", "sms"]
                     }
                   }
+                },
+                "ldap": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "identifier": {
+                      "type": "boolean"
+                    }
+                  }
                 }
               }
             },

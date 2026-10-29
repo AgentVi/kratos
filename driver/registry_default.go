@@ -1,4 +1,5 @@
 // Copyright © 2023 Ory Corp
+// Modifications Copyright © 2024 Irisity AB
 // SPDX-License-Identifier: Apache-2.0
 
 package driver
@@ -6,6 +7,7 @@ package driver
 import (
 	"context"
 	"crypto/sha256"
+	"github.com/ory/kratos/selfservice/strategy/ldap"
 	"net/http"
 	"strings"
 	"sync"
@@ -320,6 +322,7 @@ func (m *RegistryDefault) selfServiceStrategies() []any {
 				totp.NewStrategy(m),
 				webauthn.NewStrategy(m),
 				lookup.NewStrategy(m),
+				ldap.NewStrategy(m),
 			}
 		}
 	}

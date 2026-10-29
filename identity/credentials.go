@@ -1,4 +1,5 @@
 // Copyright © 2023 Ory Corp
+// Modifications Copyright © 2024 Irisity AB
 // SPDX-License-Identifier: Apache-2.0
 
 package identity
@@ -86,6 +87,7 @@ const (
 	CredentialsTypeLookup   CredentialsType = "lookup_secret"
 	CredentialsTypeWebAuthn CredentialsType = "webauthn"
 	CredentialsTypeCodeAuth CredentialsType = "code"
+	CredentialsTypeLDAP     CredentialsType = "ldap"
 )
 
 func (c CredentialsType) String() string {
@@ -106,6 +108,8 @@ func (c CredentialsType) ToUiNodeGroup() node.UiNodeGroup {
 		return node.LookupGroup
 	case CredentialsTypeCodeAuth:
 		return node.CodeGroup
+	case CredentialsTypeLDAP:
+		return node.LDAPGroup
 	default:
 		return node.DefaultGroup
 	}
@@ -118,6 +122,7 @@ var AllCredentialTypes = []CredentialsType{
 	CredentialsTypeLookup,
 	CredentialsTypeWebAuthn,
 	CredentialsTypeCodeAuth,
+	CredentialsTypeLDAP,
 }
 
 const (

@@ -1,4 +1,5 @@
 // Copyright © 2023 Ory Corp
+// Modifications Copyright © 2024 Irisity AB
 // SPDX-License-Identifier: Apache-2.0
 
 package settings
@@ -20,6 +21,7 @@ func sortNodes(ctx context.Context, n node.Nodes, schemaRef string) error {
 			node.LookupGroup,
 			node.WebAuthnGroup,
 			node.TOTPGroup,
+			node.LDAPGroup,
 		}),
 		node.SortUseOrderAppend([]string{
 			// Lookup

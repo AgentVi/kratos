@@ -1,0 +1,43 @@
+Ory Kratos
+Copyright © 2023 Ory Corp
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+Original source: https://github.com/ory/kratos
+
+This is a modified version of Ory Kratos, maintained by Irisity AB to add an
+LDAP self-service strategy. Modifications Copyright © 2024 Irisity AB, licensed
+under the Apache License, Version 2.0.
+
+It is based on Ory Kratos master as of 2024-02-16 (commit 72bdedac, approximately
+v1.1.0). It is not an official Ory release and is not endorsed by Ory Corp.
+
+Added files
+-----------
+- selfservice/strategy/ldap/                LDAP login strategy (all files)
+- persistence/sql/migrations/sql/20240216140601000000_credential_types_ldap.*.sql
+                                            Adds the "ldap" credential type
+- contrib/quickstart/kratos/ldap/           Example configuration and identity schema
+- NOTICE                                    This file
+
+Modified files
+--------------
+- driver/registry_default.go                Registers the LDAP strategy
+- driver/registry_default_test.go           Expects the LDAP strategy in the strategy lists
+- embedx/config.schema.json                 LDAP method configuration and after-login hooks
+- embedx/identity_extension.schema.json     ory.sh/kratos credentials.ldap.identifier
+- go.mod, go.sum                            Adds github.com/go-ldap/ldap/v3
+- identity/credentials.go                   Adds the "ldap" credential type
+- identity/handler.go                       Creates LDAP credentials for identities created
+                                            with schema "ldap" (identityFromCreateIdentityBody)
+- schema/errors.go                          Adds NewLDAPStatusServiceUnavailable
+- selfservice/flow/login/sort.go            Orders LDAP UI nodes
+- selfservice/flow/registration/sort.go     Orders LDAP UI nodes
+- selfservice/flow/settings/hook.go         Maps the "ldap" method to its UI node group
+- selfservice/flow/settings/sort.go         Orders LDAP UI nodes
+- selfservice/hook/web_hook.go              Copies the identity ID from webhook responses
+                                            (parseWebhookResponse)
+- text/id.go                                Adds the ErrorLdapServiceUnavailable message ID
+- text/message_validation.go                Adds the LDAP service unavailable message
+- ui/node/node.go                           Adds the "ldap" UI node group
+
+Each modified Go source file carries a "Modifications Copyright © Irisity AB"
+line below the original Ory copyright header.

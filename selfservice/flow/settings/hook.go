@@ -1,4 +1,5 @@
 // Copyright © 2023 Ory Corp
+// Modifications Copyright © 2024 Irisity AB
 // SPDX-License-Identifier: Apache-2.0
 
 package settings
@@ -129,6 +130,8 @@ func (e *HookExecutor) handleSettingsError(_ http.ResponseWriter, r *http.Reques
 				group = node.PasswordGroup
 			case "oidc":
 				group = node.OpenIDConnectGroup
+			case "ldap":
+				group = node.LDAPGroup
 			}
 
 			cont, err := container.NewFromStruct("", group, i.Traits, "traits")

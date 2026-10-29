@@ -1,4 +1,5 @@
 // Copyright © 2023 Ory Corp
+// Modifications Copyright © 2024 Irisity AB
 // SPDX-License-Identifier: Apache-2.0
 
 package schema
@@ -233,6 +234,16 @@ func NewNoTOTPDeviceRegistered() error {
 			InstancePtr: "#/",
 		},
 		Messages: new(text.Messages).Add(text.NewErrorValidationNoTOTPDevice()),
+	})
+}
+
+func NewLDAPStatusServiceUnavailable() error {
+	return errors.WithStack(&ValidationError{
+		ValidationError: &jsonschema.ValidationError{
+			Message:     `Unable to connect to the domain server, please contact your IT admin for assistance`,
+			InstancePtr: "#/",
+		},
+		Messages: new(text.Messages).Add(text.NewErrorValidationLdapServiceUnavailable()),
 	})
 }
 

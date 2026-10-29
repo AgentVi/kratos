@@ -1,4 +1,5 @@
 // Copyright © 2023 Ory Corp
+// Modifications Copyright © 2024 Irisity AB
 // SPDX-License-Identifier: Apache-2.0
 
 package text
@@ -408,6 +409,14 @@ func NewErrorValidationTraitsMismatch() *Message {
 	return &Message{
 		ID:   ErrorValidationTraitsMismatch,
 		Text: "The provided traits do not match the traits previously associated with this flow.",
+		Type: Error,
+	}
+}
+
+func NewErrorValidationLdapServiceUnavailable() *Message {
+	return &Message{
+		ID:   ErrorLdapServiceUnavailable,
+		Text: "Unable to connect to the domain server, please contact your IT admin for assistance",
 		Type: Error,
 	}
 }

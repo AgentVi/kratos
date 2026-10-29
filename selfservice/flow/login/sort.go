@@ -1,4 +1,5 @@
 // Copyright © 2023 Ory Corp
+// Modifications Copyright © 2024 Irisity AB
 // SPDX-License-Identifier: Apache-2.0
 
 package login
@@ -19,6 +20,7 @@ func sortNodes(ctx context.Context, n node.Nodes) error {
 			node.PasswordGroup,
 			node.TOTPGroup,
 			node.LookupGroup,
+			node.LDAPGroup,
 		}),
 		node.SortUseOrder([]string{
 			"csrf_token",
