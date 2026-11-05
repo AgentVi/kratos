@@ -1,7 +1,7 @@
 # Login Result Notifications
 
 Kratos can tell another service about every login result, so that it can
-write an audit log. This is used by IRIS+ (IRPE-3667). Successful and failed
+write an audit log. This is used by IRIS+. Successful and failed
 logins are sent to the hooks under `selfservice.flows.login.notifications`.
 
 Unlike the `before` and `after` login hooks, a notification hook:
