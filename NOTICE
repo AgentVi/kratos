@@ -32,6 +32,8 @@ Modified files
 - identity/handler.go                       Creates LDAP credentials for identities created
                                             with schema "ldap" (identityFromCreateIdentityBody)
 - schema/errors.go                          Adds NewLDAPStatusServiceUnavailable
+- selfservice/flow/login/hook.go            Continues with the identity an after login
+                                            web hook saved (first LDAP login)
 - selfservice/flow/login/sort.go            Orders LDAP UI nodes
 - selfservice/flow/registration/sort.go     Orders LDAP UI nodes
 - selfservice/flow/settings/hook.go         Maps the "ldap" method to its UI node group
