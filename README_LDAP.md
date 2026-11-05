@@ -20,6 +20,7 @@ selfservice/strategy/ldap/
   error.go        Static strategy-level errors
   types.go        Login request payload, LDAP credentials config, FlowMethod
   .schema/login.schema.json  JSON schema validating the login form payload
+  export_test.go  FakeDirectory, an in-memory directory for the end-to-end tests
 ```
 
 The strategy is registered in `driver/registry_default.go` alongside the
@@ -287,6 +288,14 @@ generic across arbitrary identity schemas.
   "invalid credentials" response, alongside an actual LDAP invalid-password
   bind result — so an attacker cannot distinguish "wrong password" from
   "no such user" from "directory has duplicate accounts for this username".
+- The login notification event still tells these apart. `ldapLoginFailure`
+  (`login.go`) maps the same errors to `reason: invalid_credentials` with
+  `reason_detail` `unknown_user`, `ambiguous_user` or `wrong_password`, and
+  operational errors to `result: failure, reason: ldap_unavailable`. Errors it
+  does not know, such as a broken configuration, produce no event. The
+  strategy records the submitted `ldap_identifier` and looks up the identity
+  with `FindByCredentialsIdentifier(ldap, identifier)`. See
+  [README_LOGIN_EVENTS.md](README_LOGIN_EVENTS.md).
 
 ## Connections, paging, and timeouts
 
@@ -327,6 +336,19 @@ duplicate-user and duplicate-`memberOf`-DN handling, config decoding of
 `base_dns`, the `Config → validate → resolveLDAPSearchBases` chain, and the
 TLS wiring (dial options per mode, StartTLS ordering relative to bind, and the
 fail-closed behaviour on a failed upgrade).
+`login_event_test.go` runs `ldapLogin` against the mock for every failure the
+login event reports (unknown, ambiguous across search bases, wrong password,
+service bind, user and group search, StartTLS, LDAPS handshake and dial
+failures) and checks how `ldapLoginFailure` classifies it.
+
+`login_event_integration_test.go` is an external test package (`ldap_test`),
+so unlike the tests above it can use `internal/testhelpers` and a full
+registry. It logs in through the public API for API, browser and SPA flows
+against the `FakeDirectory` from `export_test.go`, with an `after` web hook
+that acts like IRIS+ (creates the identity on the first login, rejects one
+user), and checks the login events, including that the success event of a
+first login carries the identity the hook created.
+
 `embedx/embedx_test.go` additionally verifies that the JSON schema itself
 rejects `base_dn` and `base_dns` being configured together for both
 `user_search` and `group_search`.
@@ -334,7 +356,7 @@ rejects `base_dn` and `base_dns` being configured together for both
 Run just this package's tests with:
 
 ```sh
-go test ./selfservice/strategy/ldap/... ./embedx/...
+go test -tags sqlite ./selfservice/strategy/ldap/... ./embedx/...
 ```
 
 ## Trying it out
