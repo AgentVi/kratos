@@ -1,4 +1,5 @@
 // Copyright © 2023 Ory Corp
+// Modifications Copyright © 2026 Irisity AB
 // SPDX-License-Identifier: Apache-2.0
 
 package login
@@ -140,6 +141,10 @@ type Flow struct {
 
 	// Only used internally
 	RawIDTokenNonce string `json:"-" db:"-"`
+
+	// attempt holds what the strategies learned about the login request that
+	// is being processed, for the login events. It is never persisted.
+	attempt *attempt `json:"-" db:"-" faker:"-"`
 }
 
 var _ flow.Flow = new(Flow)

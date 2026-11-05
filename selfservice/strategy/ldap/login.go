@@ -54,6 +54,45 @@ func ldapLoginError(err error) error {
 	return err
 }
 
+// ldapLoginFailure classifies an error of ldapLogin for the login event. It
+// returns false for errors that must not produce an event, such as a broken
+// configuration.
+func ldapLoginFailure(err error) (login.Failure, bool) {
+	failure := login.Failure{
+		Result: login.EventResultDenied,
+		Reason: login.ReasonInvalidCredentials,
+	}
+
+	switch {
+	case isLDAPOperationalError(err):
+		failure.Result = login.EventResultFailure
+		failure.Reason = login.ReasonLDAPUnavailable
+	case errors.Is(err, errLDAPUserNotFound):
+		failure.ReasonDetail = login.ReasonDetailUnknownUser
+	case errors.Is(err, errLDAPMultipleUsersFound):
+		failure.ReasonDetail = login.ReasonDetailAmbiguousUser
+	case ldapclient.IsErrorWithCode(err, ldapclient.LDAPResultInvalidCredentials):
+		failure.ReasonDetail = login.ReasonDetailWrongPassword
+	default:
+		return login.Failure{}, false
+	}
+
+	return failure, true
+}
+
+// knownIdentityID returns the ID of the identity with the LDAP identifier, or
+// uuid.Nil if there is none or it can't be looked up.
+func (s *Strategy) knownIdentityID(r *http.Request, identifier string) uuid.UUID {
+	i, _, err := s.d.PrivilegedIdentityPool().FindByCredentialsIdentifier(r.Context(), s.ID(), identifier)
+	if err != nil {
+		if !errors.Is(err, sqlcon.ErrNoRows) {
+			s.d.Logger().WithError(err).Warn("Could not look up the identity of a failed LDAP login.")
+		}
+		return uuid.Nil
+	}
+	return i.ID
+}
+
 func (s *Strategy) Login(w http.ResponseWriter, r *http.Request, f *login.Flow, _ *session.Session) (i *identity.Identity, err error) {
 	if err := login.CheckAAL(f, identity.AuthenticatorAssuranceLevel1); err != nil {
 		return nil, err
@@ -75,9 +114,15 @@ func (s *Strategy) Login(w http.ResponseWriter, r *http.Request, f *login.Flow, 
 		return nil, s.handleLoginError(w, r, f, &p, err)
 	}
 
+	f.RecordClaimedIdentifier(s.ID(), p.Identifier)
+
 	user, groups, err := s.ldapLogin(r.Context(), p.Identifier, p.Password)
 	if err != nil {
 		s.d.Logger().WithError(err).Error()
+		if failure, ok := ldapLoginFailure(err); ok {
+			failure.IdentityID = s.knownIdentityID(r, p.Identifier)
+			f.RecordFailure(failure)
+		}
 		return nil, s.handleLoginError(w, r, f, &p, ldapLoginError(err))
 	}
 

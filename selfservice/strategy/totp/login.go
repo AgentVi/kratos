@@ -1,4 +1,5 @@
 // Copyright © 2023 Ory Corp
+// Modifications Copyright © 2026 Irisity AB
 // SPDX-License-Identifier: Apache-2.0
 
 package totp
@@ -122,6 +123,7 @@ func (s *Strategy) Login(w http.ResponseWriter, r *http.Request, f *login.Flow, 
 	}
 
 	if !totp.Validate(p.TOTPCode, key.Secret()) {
+		f.RecordFailure(login.NewMFAFailure(s.ID(), login.ReasonDetailInvalidCode, sess.IdentityID, sess.AuthenticatorAssuranceLevel))
 		return nil, s.handleLoginError(r, f, errors.WithStack(schema.NewTOTPVerifierWrongError("#/")))
 	}
 

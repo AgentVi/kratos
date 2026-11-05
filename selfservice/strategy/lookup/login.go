@@ -1,4 +1,5 @@
 // Copyright © 2023 Ory Corp
+// Modifications Copyright © 2026 Irisity AB
 // SPDX-License-Identifier: Apache-2.0
 
 package lookup
@@ -128,12 +129,14 @@ func (s *Strategy) Login(w http.ResponseWriter, r *http.Request, f *login.Flow, 
 				o.RecoveryCodes[k].UsedAt = sqlxx.NullTime(time.Now().UTC().Round(time.Second))
 				found = true
 			} else {
+				f.RecordFailure(login.NewMFAFailure(s.ID(), login.ReasonDetailCodeAlreadyUsed, sess.IdentityID, sess.AuthenticatorAssuranceLevel))
 				return nil, s.handleLoginError(r, f, errors.WithStack(schema.NewLookupAlreadyUsed()))
 			}
 		}
 	}
 
 	if !found {
+		f.RecordFailure(login.NewMFAFailure(s.ID(), login.ReasonDetailInvalidCode, sess.IdentityID, sess.AuthenticatorAssuranceLevel))
 		return nil, s.handleLoginError(r, f, errors.WithStack(schema.NewErrorValidationLookupInvalid()))
 	}
 

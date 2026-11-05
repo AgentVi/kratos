@@ -1,4 +1,5 @@
 // Copyright © 2023 Ory Corp
+// Modifications Copyright © 2026 Irisity AB
 // SPDX-License-Identifier: Apache-2.0
 
 package login
@@ -44,6 +45,7 @@ type (
 		config.Provider
 		sessiontokenexchange.PersistenceProvider
 
+		EventNotifierProvider
 		FlowPersistenceProvider
 		HandlerProvider
 	}
@@ -92,6 +94,13 @@ func (s *ErrorHandler) WriteFlowError(w http.ResponseWriter, r *http.Request, f 
 	}
 
 	trace.SpanFromContext(r.Context()).AddEvent(events.NewLoginFailed(r.Context(), string(f.Type), string(f.RequestedAAL), f.Refresh))
+
+	// Only failures a strategy or the login hook recorded are reported. Taking
+	// the failure clears it, so the recursion below for expired flows cannot
+	// report it a second time.
+	if failure, method, claimedIdentifier := f.takeFailure(); failure != nil {
+		notifyLoginEvent(r.Context(), s.d, NewFailureEvent(r, f, failure, method, claimedIdentifier))
+	}
 
 	if expired, inner := s.PrepareReplacementForExpiredFlow(w, r, f, err); inner != nil {
 		s.WriteFlowError(w, r, f, group, inner)
