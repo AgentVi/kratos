@@ -1,4 +1,5 @@
 // Copyright © 2023 Ory Corp
+// Modifications Copyright © 2026 Irisity AB
 // SPDX-License-Identifier: Apache-2.0
 
 package config
@@ -133,6 +134,9 @@ const (
 	ViperKeySelfServiceLoginRequestLifespan                  = "selfservice.flows.login.lifespan"
 	ViperKeySelfServiceLoginAfter                            = "selfservice.flows.login.after"
 	ViperKeySelfServiceLoginBeforeHooks                      = "selfservice.flows.login.before.hooks"
+	ViperKeySelfServiceLoginNotificationHooks                = "selfservice.flows.login.notifications.hooks"
+	ViperKeySelfServiceLoginNotificationWorkers              = "selfservice.flows.login.notifications.workers"
+	ViperKeySelfServiceLoginNotificationQueueSize            = "selfservice.flows.login.notifications.queue_size"
 	ViperKeySelfServiceErrorUI                               = "selfservice.flows.error.ui_url"
 	ViperKeySelfServiceLogoutBrowserDefaultReturnTo          = "selfservice.flows.logout.after." + DefaultBrowserReturnURL
 	ViperKeySelfServiceSettingsURL                           = "selfservice.flows.settings.ui_url"
@@ -678,6 +682,24 @@ func (p *Config) SelfServiceFlowRecoveryUse(ctx context.Context) string {
 
 func (p *Config) SelfServiceFlowLoginBeforeHooks(ctx context.Context) []SelfServiceHook {
 	return p.selfServiceHooks(ctx, ViperKeySelfServiceLoginBeforeHooks)
+}
+
+// SelfServiceFlowLoginNotificationHooks returns the hooks that are notified of
+// login results. They never change the result of a login.
+func (p *Config) SelfServiceFlowLoginNotificationHooks(ctx context.Context) []SelfServiceHook {
+	return p.selfServiceHooks(ctx, ViperKeySelfServiceLoginNotificationHooks)
+}
+
+// SelfServiceFlowLoginNotificationWorkers returns how many login event
+// deliveries run at the same time.
+func (p *Config) SelfServiceFlowLoginNotificationWorkers(ctx context.Context) int {
+	return p.GetProvider(ctx).IntF(ViperKeySelfServiceLoginNotificationWorkers, 8)
+}
+
+// SelfServiceFlowLoginNotificationQueueSize returns how many login event
+// deliveries can wait for a worker.
+func (p *Config) SelfServiceFlowLoginNotificationQueueSize(ctx context.Context) int {
+	return p.GetProvider(ctx).IntF(ViperKeySelfServiceLoginNotificationQueueSize, 1000)
 }
 
 func (p *Config) SelfServiceFlowRecoveryBeforeHooks(ctx context.Context) []SelfServiceHook {
