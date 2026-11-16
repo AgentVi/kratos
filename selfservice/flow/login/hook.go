@@ -1,4 +1,5 @@
 // Copyright © 2023 Ory Corp
+// Modifications Copyright © 2026 Irisity AB
 // SPDX-License-Identifier: Apache-2.0
 
 package login
@@ -194,6 +195,21 @@ func (e *HookExecutor) PostLoginHook(
 			WithField("identity_id", i.ID).
 			WithField("flow_method", a.Active).
 			Debug("ExecuteLoginPostHook completed successfully.")
+	}
+
+	// An after login web hook with response.parse can answer with the ID of the
+	// identity. For a first LDAP login, the receiver creates the identity and
+	// the strategy's identity only exists in memory: it has no ID and no NID.
+	// Continue with the identity that was saved, or saving and checking the
+	// session fails with "Received empty nid.".
+	if s.Identity != nil && s.Identity.ID != i.ID {
+		saved, err := e.d.PrivilegedIdentityPool().GetIdentityConfidential(r.Context(), s.Identity.ID)
+		if err != nil {
+			return e.handleLoginError(w, r, g, a, i, errors.WithStack(err))
+		}
+		i = saved
+		classified.Identity, classified.IdentityID = saved, saved.ID
+		s.Identity, s.IdentityID = saved.CopyWithoutCredentials(), saved.ID
 	}
 
 	if a.Type == flow.TypeAPI {

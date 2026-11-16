@@ -204,7 +204,12 @@ which does the following, all using **one LDAP connection** dialed once with
   (`identity.NewIdentity(identity.CredentialsTypeLDAP.String())`) — actual
   persistence is expected to happen through an `after` login webhook (see the
   flow diagram comment in `login.go`); this is a deliberate, still-evolving
-  integration point, not a bug,
+  integration point, not a bug. The web hook answers with the ID of the
+  identity it created. `PostLoginHook` (`selfservice/flow/login/hook.go`)
+  notices that a hook changed the identity's ID and continues with the saved
+  identity from the database, so the session, the AAL check, the response
+  and the OAuth2 login challenge all use the saved identity and not the
+  in-memory one, which has no NID,
 - if `update_user_identity.enabled` is true and the stored identity is older
   than `refresh_time`, or if update-on-login is disabled entirely, re-derives
   the identity's `traits` from the current directory data
@@ -327,6 +332,12 @@ duplicate-user and duplicate-`memberOf`-DN handling, config decoding of
 `base_dns`, the `Config → validate → resolveLDAPSearchBases` chain, and the
 TLS wiring (dial options per mode, StartTLS ordering relative to bind, and the
 fail-closed behaviour on a failed upgrade).
+`first_login_test.go` is an external test package (`ldap_test`), so it can
+use `internal/testhelpers` and a full registry. It logs in through the public
+API (API, browser and SPA flows) against `FakeDirectory` from `export_test.go`,
+with an `after` web hook that creates the identity on the first login, and
+with `session.whoami.required_aal: highest_available`.
+
 `embedx/embedx_test.go` additionally verifies that the JSON schema itself
 rejects `base_dn` and `base_dns` being configured together for both
 `user_search` and `group_search`.
@@ -334,7 +345,7 @@ rejects `base_dn` and `base_dns` being configured together for both
 Run just this package's tests with:
 
 ```sh
-go test ./selfservice/strategy/ldap/... ./embedx/...
+go test -tags sqlite ./selfservice/strategy/ldap/... ./embedx/...
 ```
 
 ## Trying it out
