@@ -62,6 +62,20 @@ func (m *RegistryDefault) LoginEventNotifiers(ctx context.Context) (n []login.Ev
 	return n
 }
 
+// LoginEventDispatcher returns the dispatcher that every login notification
+// hook shares. It is created on the first call, which comes with the first
+// login event that has a hook to go to, so a deployment without notification
+// hooks starts no workers. Its sizes are read once, at that call.
+func (m *RegistryDefault) LoginEventDispatcher(ctx context.Context) *hook.LoginEventDispatcher {
+	m.loginEventDispatcherOnce.Do(func() {
+		m.loginEventDispatcher = hook.NewLoginEventDispatcher(
+			m.Config().SelfServiceFlowLoginNotificationWorkers(ctx),
+			m.Config().SelfServiceFlowLoginNotificationQueueSize(ctx),
+		)
+	})
+	return m.loginEventDispatcher
+}
+
 func (m *RegistryDefault) LoginHandler() *login.Handler {
 	if m.selfserviceLoginHandler == nil {
 		m.selfserviceLoginHandler = login.NewHandler(m)

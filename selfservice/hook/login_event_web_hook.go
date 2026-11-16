@@ -35,6 +35,11 @@ const (
 
 var _ login.EventNotifier = (*LoginEventWebHook)(nil)
 
+type loginEventWebHookDependencies interface {
+	webHookDependencies
+	LoginEventDispatcherProvider
+}
+
 // LoginEventWebHook sends login events to a web hook.
 //
 // It is configured like the web_hook hook (url, method, headers, auth and a
@@ -42,29 +47,37 @@ var _ login.EventNotifier = (*LoginEventWebHook)(nil)
 // delivers in the background, ignores the response and can never change an
 // identity or stop a login.
 type LoginEventWebHook struct {
-	deps webHookDependencies
+	deps loginEventWebHookDependencies
 	conf json.RawMessage
 }
 
-func NewLoginEventWebHook(deps webHookDependencies, conf json.RawMessage) *LoginEventWebHook {
+func NewLoginEventWebHook(deps loginEventWebHookDependencies, conf json.RawMessage) *LoginEventWebHook {
 	return &LoginEventWebHook{deps: deps, conf: conf}
 }
 
-// NotifyLoginEvent starts the delivery of e and returns right away.
+// NotifyLoginEvent queues the delivery of e and returns right away. If the
+// queue is full, it drops e and logs the same warning as for a delivery that
+// gave up.
 func (h *LoginEventWebHook) NotifyLoginEvent(ctx context.Context, e *login.Event) {
-	// The delivery must outlive the request, which ends as soon as the login
-	// response is written.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), loginEventTimeout)
-	go func() {
-		defer cancel()
+	// The delivery outlives the request, which ends as soon as the login
+	// response is written. The dispatcher keeps the request's values, which
+	// the configuration and tracing need, but not its cancellation.
+	queued := h.deps.LoginEventDispatcher(ctx).Enqueue(ctx, func(ctx context.Context) {
 		if err := h.deliver(ctx, e); err != nil {
-			h.deps.Logger().
-				WithError(err).
-				WithField("event_id", e.EventID).
-				WithField("event_type", e.Type).
-				Warn("Could not deliver the login event.")
+			h.logDeliveryFailure(e, err)
 		}
-	}()
+	})
+	if !queued {
+		h.logDeliveryFailure(e, ErrLoginEventQueueFull)
+	}
+}
+
+func (h *LoginEventWebHook) logDeliveryFailure(e *login.Event, err error) {
+	h.deps.Logger().
+		WithError(err).
+		WithField("event_id", e.EventID).
+		WithField("event_type", e.Type).
+		Warn("Could not deliver the login event.")
 }
 
 func (h *LoginEventWebHook) deliver(ctx context.Context, e *login.Event) (err error) {

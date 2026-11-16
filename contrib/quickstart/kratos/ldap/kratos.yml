@@ -168,12 +168,8 @@ selfservice:
       #     - hook: web_hook
       #       config:
       #         url: http://127.0.0.1:4455/api/audit/login-events
-      #         auth:
-      #           type: api_key
-      #           config:
-      #             name: X-API-Key
-      #             value: PLEASE-CHANGE-ME
-      #             in: header
+      #         # Optional. The same `auth` option as the regular web_hook
+      #         # (api_key or basic_auth), if the receiver checks a credential.
       #         # Optional. Without a body the event is sent as it is.
       #         # body: file:///etc/config/kratos/login_event.jsonnet
       #         # Retries after a network error or a 5xx response.

@@ -18,6 +18,8 @@ selfservice:
   flows:
     login:
       notifications:
+        workers: 8                    # default
+        queue_size: 1000              # default
         hooks:
           - hook: web_hook
             config:
@@ -25,12 +27,6 @@ selfservice:
               method: POST            # default
               headers:                # optional
                 X-Source: kratos
-              auth:                   # optional, same as web_hook
-                type: api_key
-                config:
-                  name: X-API-Key
-                  value: the-api-key
-                  in: header
               body: file:///etc/config/kratos/login_event.jsonnet # optional
               max_retries: 2          # default, 0 to 10
 ```
@@ -39,10 +35,45 @@ selfservice:
 `body` work as for the regular `web_hook`. The Jsonnet template receives the
 event below as `ctx`. Without a `body`, the event is sent as JSON as it is.
 
+Without an `auth` option, the request carries no credential. Set one
+(`api_key` in a header or cookie, or `basic_auth`, as for the regular
+`web_hook`) if the receiver checks one.
+
+The hook list takes effect without a restart. `workers` and `queue_size` are
+read once, when the first login event is sent, so changing them needs a
+restart.
+
+### Delivery
+
+Kratos delivers the events through a fixed number of workers (`workers`) that
+take them from a queue of fixed size (`queue_size`). Every notification hook
+shares the workers and the queue, and an event for several hooks is one
+delivery per hook. A login only puts its event in the queue and never waits
+for a delivery. The workers start with the first login event that has a hook
+to go to, so Kratos without notification hooks starts none.
+
 A delivery is retried after a network error or a 5xx response, with the same
-`event_id` and an `Idempotency-Key` header that holds it. Delivery is best
-effort: events are lost if Kratos restarts, or if the receiver is down for
-longer than the retries last (at most two minutes per event).
+`event_id` and an `Idempotency-Key` header that holds it. A delivery takes at
+most two minutes, including its retries. The two minutes start when a worker
+takes the event, so time spent waiting in the queue does not count.
+
+Delivery is best effort. An event is lost:
+
+- when the queue is full, because every worker is busy and `queue_size`
+  events wait already. The event is dropped at once, and the login goes on;
+- when the receiver is down for longer than the retries last;
+- when Kratos stops, together with every event that waits in the queue.
+
+Each lost event, apart from those lost when Kratos stops, logs the same
+warning with its `event_id` and `event_type`:
+
+```text
+level=warning msg="Could not deliver the login event." error=... event_id=... event_type=...
+```
+
+An alert on this message covers both a dropped event and a delivery that gave
+up. The `error` field tells them apart: `the login event queue is full` for a
+dropped event.
 
 The HTTP client is the one the web hooks use, so
 `clients.http.disallow_private_ip_ranges` applies.
@@ -140,26 +171,34 @@ success event carries the ID of that saved identity.
 - `selfservice/flow/login/error.go`: `WriteFlowError` sends the recorded
   failure. Taking the failure clears it, so it is sent at most once, also
   when the handler recurses for an expired flow.
-- `selfservice/hook/login_event_web_hook.go`: the `web_hook` notifier.
+- `selfservice/hook/login_event_web_hook.go`: the `web_hook` notifier. It
+  queues the delivery, or logs the warning if the queue is full.
+- `selfservice/hook/login_event_dispatcher.go`: the queue and the workers.
 - `driver/registry_default_login.go`: `LoginEventNotifiers` builds the
   notifiers from the configuration on every call, so changes are picked up
-  without a restart.
+  without a restart. `LoginEventDispatcher` creates the one dispatcher of the
+  process on its first call.
 
 ## Testing
 
 ```sh
 go test -tags sqlite ./selfservice/flow/login/ -run 'Event|Failure'
-go test -tags sqlite ./selfservice/hook/ -run TestLoginEventWebHook
+go test -tags sqlite ./selfservice/hook/ -run 'TestLoginEvent'
 go test -tags sqlite ./selfservice/strategy/password/ -run TestLoginEvents
 go test -tags sqlite ./selfservice/strategy/ldap/
 go test -tags sqlite ./selfservice/strategy/totp/ -run TestTOTPLoginEvents
 go test -tags sqlite ./selfservice/strategy/lookup/ -run TestLookupLoginEvents
+go test -tags sqlite ./selfservice/strategy/webauthn/ -run TestWebAuthnLoginEvents
 ```
 
 `internal/testhelpers.NewLoginEventReceiver` starts a receiver and configures
 it as the notification hook.
 
-## Open questions
+## Decisions
 
-- Delivery is best effort. A database outbox with at-least-once delivery
-  would need migrations and a worker.
+- Delivery is best effort, with retries and no database outbox. Events can be
+  lost when the queue is full or Kratos stops, as described under
+  [Delivery](#delivery).
+- Kratos reports `authorization_denied` when an `after` hook rejects a login,
+  so the hook itself need not report it.
+- Kratos sends `client_ip`. Whether to store it is up to the receiver.

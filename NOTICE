@@ -21,22 +21,30 @@ Added files
 - selfservice/flow/login/event.go           Login events, notifier interface and the
                                             per-request login attempt (and its test)
 - selfservice/hook/login_event_web_hook.go  Web hook that delivers login events (and its test)
+- selfservice/hook/login_event_dispatcher.go
+                                            Queue and workers that deliver login events
+                                            (and its test)
+- selfservice/hook/export_test.go           Test access to the dispatcher timeout
 - internal/testhelpers/login_events.go      Test receiver for login events
 - selfservice/strategy/password/login_event_test.go,
   selfservice/strategy/totp/login_event_test.go,
-  selfservice/strategy/lookup/login_event_test.go
+  selfservice/strategy/lookup/login_event_test.go,
+  selfservice/strategy/webauthn/login_event_test.go
                                             Login event tests per method
 - NOTICE                                    This file
 
 Modified files
 --------------
-- driver/config/config.go                   Login notification hooks configuration key
-- driver/registry_default.go                Registers the LDAP strategy
-- driver/registry_default_login.go          Builds the login event notifiers
+- driver/config/config.go                   Login notification hooks, workers and queue
+                                            size configuration keys
+- driver/registry_default.go                Registers the LDAP strategy and holds the
+                                            login event dispatcher
+- driver/registry_default_login.go          Builds the login event notifiers and the
+                                            login event dispatcher
 - driver/registry_default_test.go           Expects the LDAP strategy in the strategy lists
 - embedx/config.schema.json                 LDAP method configuration (including multiple
                                             search bases and TLS), after-login hooks and
-                                            login notification hooks
+                                            login notification hooks, workers and queue size
 - embedx/embedx_test.go                     Tests for the LDAP configuration schema
 - embedx/identity_extension.schema.json     ory.sh/kratos credentials.ldap.identifier
 - go.mod, go.sum                            Adds github.com/go-ldap/ldap/v3

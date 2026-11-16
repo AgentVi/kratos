@@ -1,5 +1,5 @@
 // Copyright © 2023 Ory Corp
-// Modifications Copyright © 2024 Irisity AB
+// Modifications Copyright © 2024-2026 Irisity AB
 // SPDX-License-Identifier: Apache-2.0
 
 package driver
@@ -123,6 +123,9 @@ type RegistryDefault struct {
 	selfserviceLoginExecutor            *login.HookExecutor
 	selfserviceLoginHandler             *login.Handler
 	selfserviceLoginRequestErrorHandler *login.ErrorHandler
+
+	loginEventDispatcher     *hook.LoginEventDispatcher
+	loginEventDispatcherOnce sync.Once
 
 	selfserviceSettingsHandler      *settings.Handler
 	selfserviceSettingsErrorHandler *settings.ErrorHandler

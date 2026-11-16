@@ -1364,6 +1364,20 @@
                       "items": {
                         "$ref": "#/definitions/selfServiceLoginNotificationWebHook"
                       }
+                    },
+                    "workers": {
+                      "title": "Notification Workers",
+                      "description": "How many login event deliveries run at the same time. Read when the first login event is sent, so a change needs a restart.",
+                      "type": "integer",
+                      "minimum": 1,
+                      "default": 8
+                    },
+                    "queue_size": {
+                      "title": "Notification Queue Size",
+                      "description": "How many login event deliveries can wait for a worker. When the queue is full, new events are dropped and a warning is logged. Read when the first login event is sent, so a change needs a restart.",
+                      "type": "integer",
+                      "minimum": 1,
+                      "default": 1000
                     }
                   }
                 }
