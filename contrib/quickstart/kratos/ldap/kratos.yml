@@ -157,6 +157,28 @@ selfservice:
 #          hooks:
 #            - hook: web_hook
 
+      # Login result notifications for the audit log. Every successful login
+      # and every rejected credential, disabled identity, unavailable
+      # directory, rejection by an after hook and failed MFA check is sent to
+      # the web hook in the background. The hook can not change the result of
+      # a login and a slow or failing receiver never delays one. See
+      # README_LOGIN_EVENTS.md for the payload.
+      # notifications:
+      #   hooks:
+      #     - hook: web_hook
+      #       config:
+      #         url: http://127.0.0.1:4455/api/audit/login-events
+      #         auth:
+      #           type: api_key
+      #           config:
+      #             name: X-API-Key
+      #             value: PLEASE-CHANGE-ME
+      #             in: header
+      #         # Optional. Without a body the event is sent as it is.
+      #         # body: file:///etc/config/kratos/login_event.jsonnet
+      #         # Retries after a network error or a 5xx response.
+      #         max_retries: 2
+
     registration:
       enabled: true
       lifespan: 10m

@@ -4,7 +4,7 @@ Licensed under the Apache License, Version 2.0 (see LICENSE).
 Original source: https://github.com/ory/kratos
 
 This is a modified version of Ory Kratos, maintained by Irisity AB to add an
-LDAP self-service strategy. Modifications Copyright © 2024-2026 Irisity AB, licensed
+LDAP self-service strategy and login result notifications for audit logging. Modifications Copyright © 2024-2026 Irisity AB, licensed
 under the Apache License, Version 2.0.
 
 It is based on Ory Kratos master as of 2024-02-16 (commit 72bdedac, approximately
@@ -17,14 +17,26 @@ Added files
                                             Adds the "ldap" credential type
 - contrib/quickstart/kratos/ldap/           Example configuration and identity schema
 - README_LDAP.md                            LDAP strategy design and operations guide
+- README_LOGIN_EVENTS.md                    Login result notifications (audit events)
+- selfservice/flow/login/event.go           Login events, notifier interface and the
+                                            per-request login attempt (and its test)
+- selfservice/hook/login_event_web_hook.go  Web hook that delivers login events (and its test)
+- internal/testhelpers/login_events.go      Test receiver for login events
+- selfservice/strategy/password/login_event_test.go,
+  selfservice/strategy/totp/login_event_test.go,
+  selfservice/strategy/lookup/login_event_test.go
+                                            Login event tests per method
 - NOTICE                                    This file
 
 Modified files
 --------------
+- driver/config/config.go                   Login notification hooks configuration key
 - driver/registry_default.go                Registers the LDAP strategy
+- driver/registry_default_login.go          Builds the login event notifiers
 - driver/registry_default_test.go           Expects the LDAP strategy in the strategy lists
 - embedx/config.schema.json                 LDAP method configuration (including multiple
-                                            search bases and TLS) and after-login hooks
+                                            search bases and TLS), after-login hooks and
+                                            login notification hooks
 - embedx/embedx_test.go                     Tests for the LDAP configuration schema
 - embedx/identity_extension.schema.json     ory.sh/kratos credentials.ldap.identifier
 - go.mod, go.sum                            Adds github.com/go-ldap/ldap/v3
@@ -32,12 +44,20 @@ Modified files
 - identity/handler.go                       Creates LDAP credentials for identities created
                                             with schema "ldap" (identityFromCreateIdentityBody)
 - schema/errors.go                          Adds NewLDAPStatusServiceUnavailable
+- selfservice/flow/login/error.go           Sends the login failure event
+- selfservice/flow/login/flow.go            Holds the login attempt of the request
+- selfservice/flow/login/hook.go            Sends the login success event and records
+                                            disabled identities and hook rejections
 - selfservice/flow/login/sort.go            Orders LDAP UI nodes
 - selfservice/flow/registration/sort.go     Orders LDAP UI nodes
 - selfservice/flow/settings/hook.go         Maps the "ldap" method to its UI node group
 - selfservice/flow/settings/sort.go         Orders LDAP UI nodes
 - selfservice/hook/web_hook.go              Copies the identity ID from webhook responses
                                             (parseWebhookResponse)
+- selfservice/strategy/lookup/login.go,
+  selfservice/strategy/password/login.go,
+  selfservice/strategy/totp/login.go,
+  selfservice/strategy/webauthn/login.go    Record failed logins for the login events
 - text/id.go                                Adds the ErrorLdapServiceUnavailable message ID
 - text/message_validation.go                Adds the LDAP service unavailable message
 - ui/node/node.go                           Adds the "ldap" UI node group

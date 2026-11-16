@@ -1,4 +1,5 @@
 // Copyright © 2023 Ory Corp
+// Modifications Copyright © 2026 Irisity AB
 // SPDX-License-Identifier: Apache-2.0
 
 package login
@@ -56,6 +57,7 @@ type (
 		x.TracingProvider
 		sessiontokenexchange.PersistenceProvider
 
+		EventNotifierProvider
 		FlowPersistenceProvider
 		HooksProvider
 		StrategyProvider
@@ -137,6 +139,14 @@ func (e *HookExecutor) PostLoginHook(
 	}
 
 	if err := s.Activate(r, i, e.d.Config(), time.Now().UTC()); err != nil {
+		if i != nil && !i.IsActive() {
+			a.RecordFailure(Failure{
+				Result:     EventResultDenied,
+				Reason:     ReasonIdentityDisabled,
+				Method:     a.Active,
+				IdentityID: i.ID,
+			})
+		}
 		return err
 	}
 
@@ -183,6 +193,14 @@ func (e *HookExecutor) PostLoginHook(
 
 				return nil
 			}
+			if isHookRejection(err) {
+				a.RecordFailure(Failure{
+					Result:     EventResultDenied,
+					Reason:     ReasonAuthorizationDenied,
+					Method:     a.Active,
+					IdentityID: identityIDOf(s, i),
+				})
+			}
 			return e.handleLoginError(w, r, g, a, i, err)
 		}
 
@@ -206,6 +224,7 @@ func (e *HookExecutor) PostLoginHook(
 			WithField("session_id", s.ID).
 			WithField("identity_id", i.ID).
 			Info("Identity authenticated successfully and was issued an Ory Kratos Session Token.")
+		notifyLoginEvent(r.Context(), e.d, NewSuccessEvent(r, a, s))
 
 		span.AddEvent(events.NewLoginSucceeded(r.Context(), &events.LoginSucceededOpts{
 			SessionID:    s.ID,
@@ -244,6 +263,7 @@ func (e *HookExecutor) PostLoginHook(
 		WithField("identity_id", i.ID).
 		WithField("session_id", s.ID).
 		Info("Identity authenticated successfully and was issued an Ory Kratos Session Cookie.")
+	notifyLoginEvent(r.Context(), e.d, NewSuccessEvent(r, a, s))
 
 	trace.SpanFromContext(r.Context()).AddEvent(events.NewLoginSucceeded(r.Context(), &events.LoginSucceededOpts{
 		SessionID:  s.ID,
@@ -375,4 +395,29 @@ func (e *HookExecutor) checkDuplicateCredentialsIdentifierMatch(ctx context.Cont
 		}
 	}
 	return schema.NewLinkedCredentialsDoNotMatch()
+}
+
+// isHookRejection reports whether an after login hook rejected the login, as
+// opposed to failing. A web hook with `response.parse` or `can_interrupt`
+// rejects a login by answering with an error status and validation messages.
+func isHookRejection(err error) bool {
+	if e := new(schema.ValidationListError); errors.As(err, &e) {
+		return true
+	}
+	if e := new(schema.ValidationError); errors.As(err, &e) {
+		return true
+	}
+	return false
+}
+
+// identityIDOf returns the ID of the identity that is logging in. A hook may
+// have set it on the session's identity, which is a copy of i.
+func identityIDOf(s *session.Session, i *identity.Identity) uuid.UUID {
+	if s != nil && s.Identity != nil && !s.Identity.ID.IsNil() {
+		return s.Identity.ID
+	}
+	if i != nil {
+		return i.ID
+	}
+	return uuid.Nil
 }

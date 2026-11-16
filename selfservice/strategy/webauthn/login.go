@@ -1,4 +1,5 @@
 // Copyright © 2023 Ory Corp
+// Modifications Copyright © 2026 Irisity AB
 // SPDX-License-Identifier: Apache-2.0
 
 package webauthn
@@ -326,6 +327,10 @@ func (s *Strategy) loginAuthenticate(_ http.ResponseWriter, r *http.Request, f *
 	}
 
 	if _, err := web.ValidateLogin(NewUser(o.UserHandle, webAuthCreds, web.Config), webAuthnSess, webAuthnResponse); err != nil {
+		if aal == identity.AuthenticatorAssuranceLevel2 {
+			// A second factor is only requested on top of an AAL1 session.
+			f.RecordFailure(login.NewMFAFailure(s.ID(), login.ReasonDetailInvalidAssertion, identityID, identity.AuthenticatorAssuranceLevel1))
+		}
 		return nil, s.handleLoginError(r, f, errors.WithStack(schema.NewWebAuthnVerifierWrongError("#/")))
 	}
 

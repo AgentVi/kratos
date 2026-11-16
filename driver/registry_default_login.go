@@ -1,4 +1,5 @@
 // Copyright © 2023 Ory Corp
+// Modifications Copyright © 2026 Irisity AB
 // SPDX-License-Identifier: Apache-2.0
 
 package driver
@@ -9,6 +10,7 @@ import (
 	"github.com/ory/kratos/driver/config"
 	"github.com/ory/kratos/identity"
 	"github.com/ory/kratos/selfservice/flow/login"
+	"github.com/ory/kratos/selfservice/hook"
 )
 
 func (m *RegistryDefault) LoginHookExecutor() *login.HookExecutor {
@@ -44,6 +46,20 @@ func (m *RegistryDefault) PostLoginHooks(ctx context.Context, credentialsType id
 		}
 	}
 	return
+}
+
+func (m *RegistryDefault) LoginEventNotifiers(ctx context.Context) (n []login.EventNotifier) {
+	for _, h := range m.Config().SelfServiceFlowLoginNotificationHooks(ctx) {
+		switch h.Name {
+		case hook.KeyWebHook:
+			n = append(n, hook.NewLoginEventWebHook(m, h.Config))
+		default:
+			m.Logger().
+				WithField("hook", h.Name).
+				Errorf("A unknown login notification hook was requested and can therefore not be used")
+		}
+	}
+	return n
 }
 
 func (m *RegistryDefault) LoginHandler() *login.Handler {

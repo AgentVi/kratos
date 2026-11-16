@@ -204,6 +204,73 @@
       "additionalProperties": false,
       "required": ["type", "config"]
     },
+    "selfServiceLoginNotificationWebHook": {
+      "type": "object",
+      "title": "Login Notification Web-Hook",
+      "description": "Sends every login result to a web hook. The request is made in the background, the response is ignored and the hook can never change an identity or stop a login.",
+      "additionalProperties": false,
+      "properties": {
+        "hook": {
+          "const": "web_hook"
+        },
+        "config": {
+          "type": "object",
+          "title": "Login Notification Web-Hook Configuration",
+          "additionalProperties": false,
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "The URL the login events are sent to.",
+              "format": "uri"
+            },
+            "method": {
+              "type": "string",
+              "description": "The HTTP method to use.",
+              "default": "POST"
+            },
+            "headers": {
+              "type": "object",
+              "description": "Additional HTTP headers to send.",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "body": {
+              "type": "string",
+              "format": "uri",
+              "pattern": "^(http|https|file|base64)://",
+              "description": "URI pointing to the jsonnet template used for payload generation. The template receives the login event as `ctx`. If unset, the event is sent as it is.",
+              "examples": [
+                "file:///path/to/login_event.jsonnet",
+                "base64://ZnVuY3Rpb24oY3R4KSBjdHg="
+              ]
+            },
+            "auth": {
+              "type": "object",
+              "title": "Auth mechanisms",
+              "description": "Define which auth mechanism the Web-Hook should use",
+              "oneOf": [
+                {
+                  "$ref": "#/definitions/webHookAuthApiKeyProperties"
+                },
+                {
+                  "$ref": "#/definitions/webHookAuthBasicAuthProperties"
+                }
+              ]
+            },
+            "max_retries": {
+              "type": "integer",
+              "description": "How often a delivery that failed with a network error or a 5xx response is retried.",
+              "minimum": 0,
+              "maximum": 10,
+              "default": 2
+            }
+          },
+          "required": ["url"]
+        }
+      },
+      "required": ["hook", "config"]
+    },
     "selfServiceWebHook": {
       "type": "object",
       "properties": {
@@ -1285,6 +1352,20 @@
                 },
                 "after": {
                   "$ref": "#/definitions/selfServiceAfterLogin"
+                },
+                "notifications": {
+                  "title": "Login Result Notifications",
+                  "description": "Hooks that are told about every successful and failed login, for example to write an audit log. They run after the `before` and `after` hooks and can not change the result of a login.",
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "hooks": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/definitions/selfServiceLoginNotificationWebHook"
+                      }
+                    }
+                  }
                 }
               }
             },

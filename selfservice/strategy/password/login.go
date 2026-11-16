@@ -1,4 +1,5 @@
 // Copyright © 2023 Ory Corp
+// Modifications Copyright © 2026 Irisity AB
 // SPDX-License-Identifier: Apache-2.0
 
 package password
@@ -21,6 +22,7 @@ import (
 
 	"github.com/ory/herodot"
 	"github.com/ory/x/decoderx"
+	"github.com/ory/x/sqlcon"
 
 	"github.com/ory/kratos/hash"
 	"github.com/ory/kratos/identity"
@@ -68,9 +70,19 @@ func (s *Strategy) Login(w http.ResponseWriter, r *http.Request, f *login.Flow, 
 		return nil, s.handleLoginError(w, r, f, &p, err)
 	}
 
-	i, c, err := s.d.PrivilegedIdentityPool().FindByCredentialsIdentifier(r.Context(), s.ID(), stringsx.Coalesce(p.Identifier, p.LegacyIdentifier))
+	identifier := stringsx.Coalesce(p.Identifier, p.LegacyIdentifier)
+	f.RecordClaimedIdentifier(s.ID(), identifier)
+
+	i, c, err := s.d.PrivilegedIdentityPool().FindByCredentialsIdentifier(r.Context(), s.ID(), identifier)
 	if err != nil {
 		time.Sleep(x.RandomDelay(s.d.Config().HasherArgon2(r.Context()).ExpectedDuration, s.d.Config().HasherArgon2(r.Context()).ExpectedDeviation))
+		if errors.Is(err, sqlcon.ErrNoRows) {
+			f.RecordFailure(login.Failure{
+				Result:       login.EventResultDenied,
+				Reason:       login.ReasonInvalidCredentials,
+				ReasonDetail: login.ReasonDetailUnknownUser,
+			})
+		}
 		return nil, s.handleLoginError(w, r, f, &p, errors.WithStack(schema.NewInvalidCredentialsError()))
 	}
 
@@ -81,6 +93,12 @@ func (s *Strategy) Login(w http.ResponseWriter, r *http.Request, f *login.Flow, 
 	}
 
 	if err := hash.Compare(r.Context(), []byte(p.Password), []byte(o.HashedPassword)); err != nil {
+		f.RecordFailure(login.Failure{
+			Result:       login.EventResultDenied,
+			Reason:       login.ReasonInvalidCredentials,
+			ReasonDetail: login.ReasonDetailWrongPassword,
+			IdentityID:   i.ID,
+		})
 		return nil, s.handleLoginError(w, r, f, &p, errors.WithStack(schema.NewInvalidCredentialsError()))
 	}
 
